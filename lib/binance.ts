@@ -3,6 +3,7 @@
 // ============================================
 
 const BINANCE_APIS = [
+  'https://data-api.binance.vision/api/v3',
   'https://api.binance.com/api/v3',
   'https://api1.binance.com/api/v3',
   'https://api2.binance.com/api/v3',
@@ -10,16 +11,27 @@ const BINANCE_APIS = [
   'https://api4.binance.com/api/v3',
 ]
 
+const FETCH_HEADERS = {
+  'Accept': 'application/json',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+}
+
 async function fetchWithFallback(path: string, options?: RequestInit): Promise<Response> {
+  let lastError: Error | null = null
   for (const base of BINANCE_APIS) {
     try {
-      const res = await fetch(`${base}${path}`, { ...options, signal: AbortSignal.timeout(8000) })
+      const res = await fetch(`${base}${path}`, {
+        ...options,
+        headers: { ...FETCH_HEADERS, ...(options?.headers || {}) },
+        signal: AbortSignal.timeout(10000),
+      })
       if (res.ok) return res
-    } catch {
+    } catch (e) {
+      lastError = e as Error
       continue
     }
   }
-  throw new Error('All Binance API endpoints failed')
+  throw lastError || new Error('All Binance API endpoints failed')
 }
 
 export interface BinanceTicker {
