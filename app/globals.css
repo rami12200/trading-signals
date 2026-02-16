@@ -1,0 +1,105 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bullish: #10B981;
+  --bearish: #EF4444;
+  --neutral: #6B7280;
+  --accent: #8B5CF6;
+  --background: #0A0F1E;
+  --surface: #1E293B;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(139, 92, 246, 0.3) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(139, 92, 246, 0.3);
+  border-radius: 3px;
+}
+
+body {
+  background: var(--background);
+  color: white;
+  font-feature-settings: 'ss01', 'ss02';
+}
+
+@layer components {
+  .card {
+    @apply bg-surface/80 backdrop-blur-sm rounded-2xl p-6 border border-white/[0.06] shadow-lg shadow-black/20;
+  }
+
+  .card-glow {
+    @apply card hover:border-accent/30 hover:shadow-accent/5 hover:shadow-xl transition-all duration-300;
+  }
+
+  .btn-primary {
+    @apply bg-gradient-to-r from-accent to-purple-500 hover:from-accent/90 hover:to-purple-500/90 text-white px-6 py-3 rounded-xl font-semibold transition-all duration-200 shadow-lg shadow-accent/20 hover:shadow-accent/30 hover:scale-[1.02] active:scale-[0.98];
+  }
+
+  .btn-secondary {
+    @apply border border-white/10 bg-white/[0.03] hover:bg-white/[0.08] px-6 py-3 rounded-xl font-medium transition-all duration-200 hover:border-white/20;
+  }
+
+  .btn-buy {
+    @apply bg-bullish/20 hover:bg-bullish/30 text-bullish border border-bullish/20 px-4 py-2 rounded-lg font-medium transition-all;
+  }
+
+  .btn-sell {
+    @apply bg-bearish/20 hover:bg-bearish/30 text-bearish border border-bearish/20 px-4 py-2 rounded-lg font-medium transition-all;
+  }
+
+  .signal-long {
+    @apply border-r-4 border-r-bullish;
+  }
+
+  .signal-short {
+    @apply border-r-4 border-r-bearish;
+  }
+
+  .badge {
+    @apply px-3 py-1 rounded-full text-xs font-semibold tracking-wide;
+  }
+
+  .badge-buy {
+    @apply bg-bullish/15 text-bullish border border-bullish/20;
+  }
+
+  .badge-sell {
+    @apply bg-bearish/15 text-bearish border border-bearish/20;
+  }
+
+  .badge-neutral {
+    @apply bg-neutral/15 text-neutral border border-neutral/20;
+  }
+
+  .glass {
+    @apply bg-white/[0.03] backdrop-blur-xl border border-white/[0.06];
+  }
+
+  .text-gradient {
+    @apply bg-gradient-to-r from-accent via-purple-400 to-pink-400 bg-clip-text text-transparent;
+  }
+
+  .glow-border {
+    @apply relative overflow-hidden;
+  }
+
+  .glow-border::before {
+    content: '';
+    @apply absolute inset-0 rounded-2xl;
+    background: linear-gradient(135deg, rgba(139, 92, 246, 0.1), transparent, rgba(236, 72, 153, 0.1));
+    z-index: -1;
+  }
+}
