@@ -2,7 +2,25 @@
 // Binance API - Real-time Market Data
 // ============================================
 
-const BINANCE_API = 'https://api.binance.com/api/v3'
+const BINANCE_APIS = [
+  'https://api.binance.com/api/v3',
+  'https://api1.binance.com/api/v3',
+  'https://api2.binance.com/api/v3',
+  'https://api3.binance.com/api/v3',
+  'https://api4.binance.com/api/v3',
+]
+
+async function fetchWithFallback(path: string, options?: RequestInit): Promise<Response> {
+  for (const base of BINANCE_APIS) {
+    try {
+      const res = await fetch(`${base}${path}`, { ...options, signal: AbortSignal.timeout(8000) })
+      if (res.ok) return res
+    } catch {
+      continue
+    }
+  }
+  throw new Error('All Binance API endpoints failed')
+}
 
 export interface BinanceTicker {
   symbol: string
@@ -16,10 +34,7 @@ export interface BinanceTicker {
 // Fetch single ticker price
 export async function getPrice(symbol: string): Promise<number> {
   try {
-    const response = await fetch(`${BINANCE_API}/ticker/price?symbol=${symbol}`, {
-      next: { revalidate: 10 },
-    })
-    if (!response.ok) return 0
+    const response = await fetchWithFallback(`/ticker/price?symbol=${symbol}`)
     const data = await response.json()
     return parseFloat(data.price)
   } catch {
@@ -30,10 +45,7 @@ export async function getPrice(symbol: string): Promise<number> {
 // Fetch 24h ticker for a symbol
 export async function get24hTicker(symbol: string): Promise<BinanceTicker | null> {
   try {
-    const response = await fetch(`${BINANCE_API}/ticker/24hr?symbol=${symbol}`, {
-      next: { revalidate: 15 },
-    })
-    if (!response.ok) return null
+    const response = await fetchWithFallback(`/ticker/24hr?symbol=${symbol}`)
     return await response.json()
   } catch {
     return null
@@ -44,11 +56,9 @@ export async function get24hTicker(symbol: string): Promise<BinanceTicker | null
 export async function getMultipleTickers(symbols: string[]): Promise<BinanceTicker[]> {
   try {
     const symbolsParam = JSON.stringify(symbols)
-    const response = await fetch(
-      `${BINANCE_API}/ticker/24hr?symbols=${encodeURIComponent(symbolsParam)}`,
-      { next: { revalidate: 15 } }
+    const response = await fetchWithFallback(
+      `/ticker/24hr?symbols=${encodeURIComponent(symbolsParam)}`
     )
-    if (!response.ok) return []
     return await response.json()
   } catch {
     return []
@@ -62,11 +72,9 @@ export async function getKlines(
   limit: number = 200
 ): Promise<any[]> {
   try {
-    const response = await fetch(
-      `${BINANCE_API}/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
-      { next: { revalidate: 30 } }
+    const response = await fetchWithFallback(
+      `/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`
     )
-    if (!response.ok) return []
     return await response.json()
   } catch {
     return []
