@@ -83,7 +83,7 @@ interface QuickScalpSignal {
   timestamp: string
 }
 
-function analyzeQuickScalp(candles: OHLCV[], symbol: string): QuickScalpSignal | null {
+function analyzeQuickScalp(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL'): QuickScalpSignal | null {
   if (candles.length < 50) return null
 
   const closes = candles.map((c) => c.close)
@@ -234,6 +234,13 @@ function analyzeQuickScalp(candles: OHLCV[], symbol: string): QuickScalpSignal |
     }
   }
 
+  // === Support/Resistance for bounce detection ===
+  const sr = findSupportResistance(candles)
+  const nearSupport = sr.support.filter((s) => s < currentPrice).pop()
+  const nearResistance = sr.resistance.find((r) => r > currentPrice)
+  const atSupport = nearSupport && Math.abs(currentPrice - nearSupport) / currentPrice < 0.003
+  const atResistance = nearResistance && Math.abs(nearResistance - currentPrice) / currentPrice < 0.003
+
   // === Determine Action ===
   let action: ScalpAction = 'WAIT'
   let reason = ''
@@ -266,24 +273,22 @@ function analyzeQuickScalp(candles: OHLCV[], symbol: string): QuickScalpSignal |
     if (lastCandleBullish) reasons.push('الشمعة الأخيرة صاعدة')
   }
 
-  // FAST REVERSAL: SELL when price breaks below EMA9 even if emaTrend is UP
-  if (action === 'WAIT' && emaTrend === 'UP' && currentPrice < ema9 && prevClose >= ema9Prev && lastCandleBearish && strongCandle && priceGoingDown) {
-    action = 'SELL'
-    reason = 'كسر EMA 9 للأسفل — بيع سريع (انعكاس)'
-    reasons.push('السعر كسر تحت EMA 9')
-    reasons.push('شمعة هابطة قوية')
-    reasons.push('السعر ينزل بوضوح')
-    if (macdAccelDown) reasons.push('MACD يتراجع')
+  // BOUNCE from support — BUY signal
+  if (action === 'WAIT' && atSupport && lastCandleBullish && strongCandle && rsi < 45) {
+    action = 'BUY'
+    reason = 'ارتداد من مستوى دعم قوي — فرصة شراء'
+    reasons.push(`السعر عند دعم ${nearSupport!.toFixed(2)}`)
+    reasons.push('شمعة صاعدة قوية (ارتداد)')
+    if (rsi < 35) reasons.push('RSI في ذروة بيع — فرصة ارتداد')
   }
 
-  // FAST REVERSAL: BUY when price breaks above EMA9 even if emaTrend is DOWN
-  if (action === 'WAIT' && emaTrend === 'DOWN' && currentPrice > ema9 && prevClose <= ema9Prev && lastCandleBullish && strongCandle && priceGoingUp) {
-    action = 'BUY'
-    reason = 'اختراق EMA 9 للأعلى — شراء سريع (انعكاس)'
-    reasons.push('السعر اخترق فوق EMA 9')
-    reasons.push('شمعة صاعدة قوية')
-    reasons.push('السعر يطلع بوضوح')
-    if (macdAccelUp) reasons.push('MACD يتسارع')
+  // BOUNCE from resistance — SELL signal
+  if (action === 'WAIT' && atResistance && lastCandleBearish && strongCandle && rsi > 55) {
+    action = 'SELL'
+    reason = 'ارتداد من مستوى مقاومة قوي — فرصة بيع'
+    reasons.push(`السعر عند مقاومة ${nearResistance!.toFixed(2)}`)
+    reasons.push('شمعة هابطة قوية (ارتداد)')
+    if (rsi > 65) reasons.push('RSI في ذروة شراء — فرصة ارتداد')
   }
 
   // SELL conditions — confirm price direction is not against us
@@ -311,6 +316,26 @@ function analyzeQuickScalp(candles: OHLCV[], symbol: string): QuickScalpSignal |
     reason = 'زخم هبوط قوي — فرصة بيع'
     reasons.push('الزخم قوي جداً (EMA + RSI + MACD + السعر)')
     if (lastCandleBearish) reasons.push('الشمعة الأخيرة هابطة')
+  }
+
+  // ============================================
+  // 🔴 HIGHER TIMEFRAME TREND FILTER (CRITICAL)
+  // Block trades that go against the bigger trend
+  // ============================================
+  if (htfTrend === 'UP' && (action === 'SELL')) {
+    action = 'WAIT'
+    reason = 'الترند العام صاعد (1 ساعة) — ممنوع البيع'
+    reasons.length = 0
+    reasons.push('الترند على فريم الساعة صاعد')
+    reasons.push('البيع ضد الترند = خطر عالي')
+    reasons.push('انتظر إشارة شراء مع الترند')
+  } else if (htfTrend === 'DOWN' && (action === 'BUY')) {
+    action = 'WAIT'
+    reason = 'الترند العام هابط (1 ساعة) — ممنوع الشراء'
+    reasons.length = 0
+    reasons.push('الترند على فريم الساعة هابط')
+    reasons.push('الشراء ضد الترند = خطر عالي')
+    reasons.push('انتظر إشارة بيع مع الترند')
   }
 
   // EXIT conditions — detect actual reversal happening
@@ -351,6 +376,11 @@ function analyzeQuickScalp(candles: OHLCV[], symbol: string): QuickScalpSignal |
     reasons.push('انتظر حتى يتوقف الصعود')
   }
 
+  // Add HTF trend info to reasons
+  if (action !== 'WAIT' && htfTrend !== 'NEUTRAL') {
+    reasons.push(htfTrend === 'UP' ? '📈 الترند العام صاعد (1 ساعة)' : '📉 الترند العام هابط (1 ساعة)')
+  }
+
   // WAIT with context
   if (action === 'WAIT') {
     if (emaTrend === 'UP') {
@@ -366,7 +396,6 @@ function analyzeQuickScalp(candles: OHLCV[], symbol: string): QuickScalpSignal |
   }
 
   // === Calculate SL/TP using Support/Resistance + ATR ===
-  const sr = findSupportResistance(candles)
   let entry = currentPrice
   let stopLoss: number
   let target: number
@@ -495,13 +524,35 @@ export async function GET(request: Request) {
 
     const signals: QuickScalpSignal[] = []
 
-    // Fetch and analyze each symbol
+    // Fetch and analyze each symbol with HTF trend filter
     const promises = symbols.map(async (symbol) => {
       try {
+        // Get main timeframe candles
         const rawKlines = await getCachedKlines(symbol, interval, 200)
         if (rawKlines.length < 50) return null
         const candles = parseKlines(rawKlines)
-        return analyzeQuickScalp(candles, symbol)
+
+        // Get higher timeframe (1h) for trend filter
+        let htfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL'
+        try {
+          const htfKlines = await getCachedKlines(symbol, '1h', 50)
+          if (htfKlines.length >= 30) {
+            const htfCandles = parseKlines(htfKlines)
+            const htfCloses = htfCandles.map((c: OHLCV) => c.close)
+            const htfEma9 = calcEMA(htfCloses, 9)
+            const htfEma21 = calcEMA(htfCloses, 21)
+            if (htfEma9.length > 0 && htfEma21.length > 0) {
+              const e9 = htfEma9[htfEma9.length - 1]
+              const e21 = htfEma21[htfEma21.length - 1]
+              const htfPrice = htfCloses[htfCloses.length - 1]
+              // Strong trend: EMA9 > EMA21 AND price above both
+              if (e9 > e21 && htfPrice > e9) htfTrend = 'UP'
+              else if (e9 < e21 && htfPrice < e9) htfTrend = 'DOWN'
+            }
+          }
+        } catch {}
+
+        return analyzeQuickScalp(candles, symbol, htfTrend)
       } catch {
         return null
       }

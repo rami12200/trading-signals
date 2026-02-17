@@ -97,7 +97,7 @@ function toMT5Symbol(binanceSymbol: string): string {
 }
 
 // === Analyze signal for EA ===
-function analyzeForEA(candles: OHLCV[], symbol: string): EASignal | null {
+function analyzeForEA(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL'): EASignal | null {
   if (candles.length < 50) return null
 
   const closes = candles.map((c) => c.close)
@@ -159,9 +159,6 @@ function analyzeForEA(candles: OHLCV[], symbol: string): EASignal | null {
   } else if (emaTrend === 'UP' && currentPrice > currentEMA9 && currentRSI < 65 && macdAccelUp && priceGoingUp && strongCandle) {
     action = 'BUY'
     reason = 'Uptrend + price above EMA9 + MACD accelerating'
-  } else if (emaTrend === 'DOWN' && currentPrice > currentEMA9 && prevEMA9 > closes[closes.length - 2] && lastCandleBullish && strongCandle && priceGoingUp) {
-    action = 'BUY'
-    reason = 'Fast reversal: price broke above EMA9'
   }
 
   // SELL conditions
@@ -172,10 +169,14 @@ function analyzeForEA(candles: OHLCV[], symbol: string): EASignal | null {
     } else if (emaTrend === 'DOWN' && currentPrice < currentEMA9 && currentRSI > 35 && macdAccelDown && priceGoingDown && strongCandle) {
       action = 'SELL'
       reason = 'Downtrend + price below EMA9 + MACD declining'
-    } else if (emaTrend === 'UP' && currentPrice < currentEMA9 && prevEMA9 < closes[closes.length - 2] && lastCandleBearish && strongCandle && priceGoingDown) {
-      action = 'SELL'
-      reason = 'Fast reversal: price broke below EMA9'
     }
+  }
+
+  // HTF TREND FILTER: Block trades against the bigger trend
+  if (htfTrend === 'UP' && action === 'SELL') {
+    action = 'NONE'
+  } else if (htfTrend === 'DOWN' && action === 'BUY') {
+    action = 'NONE'
   }
 
   if (action === 'NONE') return null
@@ -392,7 +393,27 @@ export async function GET(request: Request) {
         const rawKlines = await getCachedKlines(symbol, interval, 200)
         if (rawKlines.length < 50) return null
         const candles = parseKlines(rawKlines)
-        return analyzeForEA(candles, symbol)
+
+        // Get higher timeframe (1h) for trend filter
+        let htfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL'
+        try {
+          const htfKlines = await getCachedKlines(symbol, '1h', 50)
+          if (htfKlines.length >= 30) {
+            const htfCandles = parseKlines(htfKlines)
+            const htfCloses = htfCandles.map((c: OHLCV) => c.close)
+            const htfEma9 = calcEMA(htfCloses, 9)
+            const htfEma21 = calcEMA(htfCloses, 21)
+            if (htfEma9.length > 0 && htfEma21.length > 0) {
+              const e9 = htfEma9[htfEma9.length - 1]
+              const e21 = htfEma21[htfEma21.length - 1]
+              const htfPrice = htfCloses[htfCloses.length - 1]
+              if (e9 > e21 && htfPrice > e9) htfTrend = 'UP'
+              else if (e9 < e21 && htfPrice < e9) htfTrend = 'DOWN'
+            }
+          }
+        } catch {}
+
+        return analyzeForEA(candles, symbol, htfTrend)
       } catch {
         return null
       }
