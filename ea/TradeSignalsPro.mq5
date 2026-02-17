@@ -504,15 +504,23 @@ bool ExecuteBuy(string symbol, Signal &sig)
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
    
-   if(InpUseSignalSLTP && sig.stopLoss > 0 && sig.takeProfit > 0)
+   if(InpUseSignalSLTP && sig.stopLoss > 0)
    {
       sl = NormalizeDouble(sig.stopLoss, digits);
-      tp = NormalizeDouble(sig.takeProfit, digits);
+      if(sig.takeProfit > 0)
+         tp = NormalizeDouble(sig.takeProfit, digits);
    }
    else if(InpManualSL > 0 && InpManualTP > 0)
    {
       sl = NormalizeDouble(ask - InpManualSL * point, digits);
       tp = NormalizeDouble(ask + InpManualTP * point, digits);
+   }
+   
+   // Fallback TP: 1:1.5 R:R if SL exists but TP is missing
+   if(sl > 0 && tp == 0)
+   {
+      double slDist = ask - sl;
+      tp = NormalizeDouble(ask + slDist * 1.5, digits);
    }
    
    // Validate SL/TP
@@ -549,15 +557,23 @@ bool ExecuteSell(string symbol, Signal &sig)
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
    
-   if(InpUseSignalSLTP && sig.stopLoss > 0 && sig.takeProfit > 0)
+   if(InpUseSignalSLTP && sig.stopLoss > 0)
    {
       sl = NormalizeDouble(sig.stopLoss, digits);
-      tp = NormalizeDouble(sig.takeProfit, digits);
+      if(sig.takeProfit > 0)
+         tp = NormalizeDouble(sig.takeProfit, digits);
    }
    else if(InpManualSL > 0 && InpManualTP > 0)
    {
       sl = NormalizeDouble(bid + InpManualSL * point, digits);
       tp = NormalizeDouble(bid - InpManualTP * point, digits);
+   }
+   
+   // Fallback TP: 1:1.5 R:R if SL exists but TP is missing
+   if(sl > 0 && tp == 0)
+   {
+      double slDist = sl - bid;
+      tp = NormalizeDouble(bid - slDist * 1.5, digits);
    }
    
    // Validate SL/TP for SELL: SL must be above bid, TP must be below bid

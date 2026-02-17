@@ -408,6 +408,21 @@ function analyzeQuickScalp(candles: OHLCV[], symbol: string): QuickScalpSignal |
     }
   }
 
+  // === Ensure TP always exists with minimum 1:1.5 R:R ===
+  const slDist = Math.abs(currentPrice - stopLoss)
+  const tpDist = Math.abs(target - currentPrice)
+  const minTPDist = slDist * 1.5
+
+  if (action === 'BUY' || action === 'EXIT_SELL') {
+    if (target <= currentPrice || tpDist < minTPDist) {
+      target = currentPrice + minTPDist
+    }
+  } else if (action === 'SELL' || action === 'EXIT_BUY') {
+    if (target >= currentPrice || tpDist < minTPDist) {
+      target = currentPrice - minTPDist
+    }
+  }
+
   const risk = Math.abs(currentPrice - stopLoss)
   const profit = Math.abs(target - currentPrice)
   const rr = risk > 0 ? (profit / risk).toFixed(1) : '0'

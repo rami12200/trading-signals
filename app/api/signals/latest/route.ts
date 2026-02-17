@@ -220,13 +220,32 @@ function analyzeForEA(candles: OHLCV[], symbol: string): EASignal | null {
       : atrTP
   }
 
+  // === Ensure TP always exists with minimum 1:1.5 R:R ===
+  const slDistance = Math.abs(currentPrice - stopLoss)
+  const tpDistance = Math.abs(takeProfit - currentPrice)
+  const minTP = slDistance * 1.5 // Minimum 1:1.5 risk/reward
+
+  if (action === 'BUY') {
+    // TP must be above entry, and at least 1.5x the SL distance
+    if (takeProfit <= currentPrice || tpDistance < minTP) {
+      takeProfit = currentPrice + minTP
+    }
+  } else {
+    // TP must be below entry, and at least 1.5x the SL distance
+    if (takeProfit >= currentPrice || tpDistance < minTP) {
+      takeProfit = currentPrice - minTP
+    }
+  }
+
+  const decimals = currentPrice >= 1000 ? 2 : currentPrice >= 1 ? 4 : 6
+
   return {
     symbol,
     mt5Symbol: toMT5Symbol(symbol),
     action,
     price: currentPrice,
-    stopLoss: parseFloat(stopLoss.toFixed(currentPrice >= 1000 ? 2 : currentPrice >= 1 ? 4 : 6)),
-    takeProfit: parseFloat(takeProfit.toFixed(currentPrice >= 1000 ? 2 : currentPrice >= 1 ? 4 : 6)),
+    stopLoss: parseFloat(stopLoss.toFixed(decimals)),
+    takeProfit: parseFloat(takeProfit.toFixed(decimals)),
     volume: 0.1,
     signalQuality,
     reason,
