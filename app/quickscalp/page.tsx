@@ -168,6 +168,8 @@ export default function QuickScalpPage() {
   const [tradeHistory, setTradeHistory] = useState<ClosedTrade[]>([])
   const [showHistory, setShowHistory] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(true)
+  const [executingTrade, setExecutingTrade] = useState<string | null>(null)
+  const [executedTrades, setExecutedTrades] = useState<Record<string, boolean>>({})
   const lastSignalsRef = useRef<Record<string, string>>({})
   const isFirstLoad = useRef(true)
 
@@ -868,19 +870,54 @@ export default function QuickScalpPage() {
                           📋 دخلت الصفقة — احفظ البيانات
                         </button>
                       )}
-                      <a
-                        href="https://www.exness.com"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className={`px-6 py-3 rounded-xl font-bold text-sm text-center transition-all ${
-                          sig.action === 'BUY'
-                            ? 'bg-bullish/20 hover:bg-bullish/30 text-bullish border border-bullish/30'
-                            : 'bg-bearish/20 hover:bg-bearish/30 text-bearish border border-bearish/30'
-                        }`}
-                      >
-                        افتح Exness ↗
-                      </a>
+                      {executedTrades[sig.symbol] ? (
+                        <div className="px-6 py-3 rounded-xl font-bold text-sm text-center bg-bullish/20 text-bullish border border-bullish/30">
+                          ✅ تم إرسال الأمر لـ MT5
+                        </div>
+                      ) : (
+                        <button
+                          onClick={async (e) => {
+                            e.stopPropagation()
+                            setExecutingTrade(sig.symbol)
+                            try {
+                              const res = await fetch('/api/signals/execute', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                  symbol: sig.symbol,
+                                  action: sig.action,
+                                  entry: sig.entry,
+                                  stopLoss: sig.stopLoss,
+                                  takeProfit: sig.target,
+                                }),
+                              })
+                              const data = await res.json()
+                              if (data.success) {
+                                setExecutedTrades((prev) => ({ ...prev, [sig.symbol]: true }))
+                                setTimeout(() => setExecutedTrades((prev) => ({ ...prev, [sig.symbol]: false })), 10000)
+                              } else {
+                                alert('فشل إرسال الأمر: ' + (data.error || 'خطأ غير معروف'))
+                              }
+                            } catch {
+                              alert('فشل الاتصال بالسيرفر')
+                            } finally {
+                              setExecutingTrade(null)
+                            }
+                          }}
+                          disabled={executingTrade === sig.symbol}
+                          className={`px-6 py-3 rounded-xl font-bold text-sm text-center transition-all ${
+                            sig.action === 'BUY'
+                              ? 'bg-bullish/20 hover:bg-bullish/30 text-bullish border border-bullish/30'
+                              : 'bg-bearish/20 hover:bg-bearish/30 text-bearish border border-bearish/30'
+                          } ${executingTrade === sig.symbol ? 'opacity-50 cursor-wait' : ''}`}
+                        >
+                          {executingTrade === sig.symbol
+                            ? '⏳ جاري الإرسال...'
+                            : sig.action === 'BUY'
+                              ? '🟢 نفّذ شراء على MT5'
+                              : '🔴 نفّذ بيع على MT5'}
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

@@ -73,6 +73,7 @@ struct Signal
    string quality;      // STRONG, NORMAL, WEAK
    string reason;
    string timestamp;
+   string orderId;      // Order ID from server
 };
 
 //+------------------------------------------------------------------+
@@ -169,18 +170,28 @@ void OnTick()
 //+------------------------------------------------------------------+
 void FetchAndProcessSignals()
 {
-   // Build URL with parameters
-   string url = InpApiUrl + "?key=" + InpApiKey + "&interval=" + InpInterval;
-   if(InpStrongOnly) url += "&quality=STRONG";
+   // Build URL - use execute endpoint for manual orders
+   string baseUrl = InpApiUrl;
+   // Replace /signals/latest with /signals/execute if needed
+   if(StringFind(baseUrl, "/signals/latest") >= 0)
+   {
+      StringReplace(baseUrl, "/signals/latest", "/signals/execute");
+   }
+   else if(StringFind(baseUrl, "/signals/execute") < 0)
+   {
+      baseUrl = baseUrl + "/execute";
+   }
+   
+   string url = baseUrl + "?key=" + InpApiKey;
    
    // Prepare request
    char   postData[];
    char   result[];
    string headers = "User-Agent: TradeSignalsPro-EA/1.0\r\n";
    string resultHeaders;
-   int    timeout = 10000; // 10 seconds
+   int    timeout = 10000;
    
-   // Send HTTP GET request
+   // Send HTTP GET request to fetch pending orders
    ResetLastError();
    int res = WebRequest("GET", url, headers, timeout, postData, result, resultHeaders);
    
@@ -190,7 +201,7 @@ void FetchAndProcessSignals()
       if(err == 4014)
       {
          Print("ERROR: WebRequest not allowed! Add this URL to Tools > Options > Expert Advisors > Allow WebRequest:");
-         Print(InpApiUrl);
+         Print(baseUrl);
       }
       else
       {
@@ -210,18 +221,23 @@ void FetchAndProcessSignals()
    // Parse JSON response
    string jsonStr = CharArrayToString(result);
    
-   // Parse signals from JSON
+   // Parse orders from JSON
    Signal signals[];
-   int signalCount = ParseSignals(jsonStr, signals);
+   int signalCount = ParseOrders(jsonStr, signals);
    
    if(signalCount <= 0) return;
    
    totalSignalsReceived += signalCount;
    
-   // Process each signal
+   // Process each order
    for(int i = 0; i < signalCount; i++)
    {
-      ProcessSignal(signals[i]);
+      bool executed = ProcessSignal(signals[i]);
+      if(executed)
+      {
+         // Mark order as executed on server
+         MarkOrderExecuted(baseUrl, signals[i].orderId);
+      }
    }
 }
 
@@ -230,19 +246,16 @@ void FetchAndProcessSignals()
 //+------------------------------------------------------------------+
 int ParseSignals(string json, Signal &signals[])
 {
-   // Check for success
    if(StringFind(json, "\"success\":true") < 0 && StringFind(json, "\"success\": true") < 0)
    {
       Print("API returned error: ", StringSubstr(json, 0, 200));
       return 0;
    }
    
-   // Find signals array
    int signalsStart = StringFind(json, "\"signals\":[");
    if(signalsStart < 0) signalsStart = StringFind(json, "\"signals\": [");
    if(signalsStart < 0) return 0;
    
-   // Count signals by counting "action" occurrences
    int count = 0;
    int searchPos = signalsStart;
    while(true)
@@ -256,7 +269,6 @@ int ParseSignals(string json, Signal &signals[])
    
    ArrayResize(signals, count);
    
-   // Parse each signal object
    int objStart = signalsStart;
    for(int i = 0; i < count; i++)
    {
@@ -277,11 +289,84 @@ int ParseSignals(string json, Signal &signals[])
       signals[i].quality    = ExtractJsonString(obj, "signalQuality");
       signals[i].reason     = ExtractJsonString(obj, "reason");
       signals[i].timestamp  = ExtractJsonString(obj, "timestamp");
+      signals[i].orderId    = "";
       
       objStart = objEnd;
    }
    
    return count;
+}
+
+//+------------------------------------------------------------------+
+//| Parse orders from /api/signals/execute response                   |
+//+------------------------------------------------------------------+
+int ParseOrders(string json, Signal &signals[])
+{
+   if(StringFind(json, "\"success\":true") < 0 && StringFind(json, "\"success\": true") < 0)
+   {
+      return 0;
+   }
+   
+   int ordersStart = StringFind(json, "\"orders\":[");
+   if(ordersStart < 0) ordersStart = StringFind(json, "\"orders\": [");
+   if(ordersStart < 0) return 0;
+   
+   int count = 0;
+   int searchPos = ordersStart;
+   while(true)
+   {
+      searchPos = StringFind(json, "\"action\":", searchPos + 1);
+      if(searchPos < 0) break;
+      count++;
+   }
+   
+   if(count == 0) return 0;
+   
+   ArrayResize(signals, count);
+   
+   int objStart = ordersStart;
+   for(int i = 0; i < count; i++)
+   {
+      objStart = StringFind(json, "{", objStart + 1);
+      if(objStart < 0) break;
+      
+      int objEnd = StringFind(json, "}", objStart);
+      if(objEnd < 0) break;
+      
+      string obj = StringSubstr(json, objStart, objEnd - objStart + 1);
+      
+      signals[i].symbol     = ExtractJsonString(obj, "symbol");
+      signals[i].mt5Symbol  = ExtractJsonString(obj, "mt5Symbol");
+      signals[i].action     = ExtractJsonString(obj, "action");
+      signals[i].price      = ExtractJsonDouble(obj, "entry");
+      signals[i].stopLoss   = ExtractJsonDouble(obj, "stopLoss");
+      signals[i].takeProfit = ExtractJsonDouble(obj, "takeProfit");
+      signals[i].quality    = "MANUAL";
+      signals[i].reason     = "Manual order from website";
+      signals[i].timestamp  = ExtractJsonString(obj, "createdAt");
+      signals[i].orderId    = ExtractJsonString(obj, "id");
+      
+      objStart = objEnd;
+   }
+   
+   return count;
+}
+
+//+------------------------------------------------------------------+
+//| Mark order as executed on server                                  |
+//+------------------------------------------------------------------+
+void MarkOrderExecuted(string baseUrl, string orderId)
+{
+   if(orderId == "") return;
+   
+   string url = baseUrl + "?key=" + InpApiKey + "&executed=" + orderId;
+   
+   char   postData[];
+   char   result[];
+   string headers = "User-Agent: TradeSignalsPro-EA/1.0\r\n";
+   string resultHeaders;
+   
+   WebRequest("GET", url, headers, 5000, postData, result, resultHeaders);
 }
 
 //+------------------------------------------------------------------+
@@ -343,7 +428,7 @@ double ExtractJsonDouble(string json, string key)
 //+------------------------------------------------------------------+
 //| Process a single signal                                           |
 //+------------------------------------------------------------------+
-void ProcessSignal(Signal &sig)
+bool ProcessSignal(Signal &sig)
 {
    // Map to broker symbol
    string brokerSymbol = MapToBrokerSymbol(sig.mt5Symbol);
@@ -354,40 +439,54 @@ void ProcessSignal(Signal &sig)
       // Try without suffix
       if(!SymbolSelect(sig.mt5Symbol, true))
       {
-         Print("Symbol not found: ", brokerSymbol, " (", sig.mt5Symbol, ")");
-         return;
+         return false; // Symbol not available - skip silently
       }
       brokerSymbol = sig.mt5Symbol;
+   }
+   
+   // Check if trading is allowed on this symbol
+   if(!SymbolInfoInteger(brokerSymbol, SYMBOL_TRADE_MODE))
+   {
+      return false; // Trading disabled for this symbol
+   }
+   
+   // Check if we can get a valid price
+   double checkBid = SymbolInfoDouble(brokerSymbol, SYMBOL_BID);
+   double checkAsk = SymbolInfoDouble(brokerSymbol, SYMBOL_ASK);
+   if(checkBid == 0 || checkAsk == 0)
+   {
+      return false; // No price available
    }
    
    // Check allowed pairs filter
    if(InpAllowedPairs != "")
    {
       if(StringFind(InpAllowedPairs, sig.mt5Symbol) < 0 && StringFind(InpAllowedPairs, brokerSymbol) < 0)
-         return;
+         return false;
    }
    
    // Check if we already have a position on this symbol
    if(HasOpenPosition(brokerSymbol))
    {
-      return; // Skip - already have a position
+      Print("Already have position on ", brokerSymbol, " - skipping");
+      return false;
    }
    
    // Check max trades limit
    if(CountOpenPositions() >= InpMaxTrades)
    {
-      return; // Skip - max trades reached
+      Print("Max trades reached (", InpMaxTrades, ") - skipping");
+      return false;
    }
    
-   // Check signal quality filter
-   if(InpStrongOnly && sig.quality != "STRONG")
-      return;
-   
    // Execute trade
+   bool result = false;
    if(sig.action == "BUY")
-      ExecuteBuy(brokerSymbol, sig);
+      result = ExecuteBuy(brokerSymbol, sig);
    else if(sig.action == "SELL")
-      ExecuteSell(brokerSymbol, sig);
+      result = ExecuteSell(brokerSymbol, sig);
+   
+   return result;
 }
 
 //+------------------------------------------------------------------+
@@ -401,10 +500,10 @@ string MapToBrokerSymbol(string mt5Symbol)
 //+------------------------------------------------------------------+
 //| Execute BUY order                                                 |
 //+------------------------------------------------------------------+
-void ExecuteBuy(string symbol, Signal &sig)
+bool ExecuteBuy(string symbol, Signal &sig)
 {
    double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
-   if(ask == 0) { Print("Cannot get ASK price for ", symbol); return; }
+   if(ask == 0) { Print("Cannot get ASK price for ", symbol); return false; }
    
    double sl = 0;
    double tp = 0;
@@ -433,21 +532,23 @@ void ExecuteBuy(string symbol, Signal &sig)
       Print("✅ BUY ", symbol, " @ ", ask, " SL=", sl, " TP=", tp, " [", sig.quality, "] ", sig.reason);
       totalTradesOpened++;
       dailyTradeCount++;
+      return true;
    }
    else
    {
       Print("❌ BUY FAILED: ", symbol, " Error=", GetLastError(), " RetCode=", trade.ResultRetcode());
       totalErrors++;
+      return false;
    }
 }
 
 //+------------------------------------------------------------------+
 //| Execute SELL order                                                |
 //+------------------------------------------------------------------+
-void ExecuteSell(string symbol, Signal &sig)
+bool ExecuteSell(string symbol, Signal &sig)
 {
    double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
-   if(bid == 0) { Print("Cannot get BID price for ", symbol); return; }
+   if(bid == 0) { Print("Cannot get BID price for ", symbol); return false; }
    
    double sl = 0;
    double tp = 0;
@@ -465,9 +566,9 @@ void ExecuteSell(string symbol, Signal &sig)
       tp = NormalizeDouble(bid - InpManualTP * point, digits);
    }
    
-   // Validate SL/TP
-   if(sl > 0 && sl <= bid) { Print("Invalid SL for SELL: SL=", sl, " <= BID=", bid); sl = 0; tp = 0; }
-   if(tp >= bid) { Print("Invalid TP for SELL: TP=", tp, " >= BID=", bid); tp = 0; }
+   // Validate SL/TP for SELL: SL must be above bid, TP must be below bid
+   if(sl > 0 && sl <= bid) { sl = 0; }
+   if(tp > 0 && tp >= bid) { tp = 0; }
    
    string comment = "TSP|" + sig.quality + "|" + sig.mt5Symbol;
    
@@ -476,11 +577,13 @@ void ExecuteSell(string symbol, Signal &sig)
       Print("✅ SELL ", symbol, " @ ", bid, " SL=", sl, " TP=", tp, " [", sig.quality, "] ", sig.reason);
       totalTradesOpened++;
       dailyTradeCount++;
+      return true;
    }
    else
    {
       Print("❌ SELL FAILED: ", symbol, " Error=", GetLastError(), " RetCode=", trade.ResultRetcode());
       totalErrors++;
+      return false;
    }
 }
 
