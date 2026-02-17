@@ -854,6 +854,15 @@ export default function QuickScalpPage() {
                   {/* Trade Action Buttons */}
                   {(sig.action === 'BUY' || sig.action === 'SELL') && (
                     <div className="mt-4 flex flex-col sm:flex-row justify-center gap-3">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          openTrade(sig)
+                        }}
+                        className="px-6 py-3 rounded-xl font-bold text-sm bg-accent hover:bg-accent/80 text-white transition-all shadow-lg shadow-accent/20"
+                      >
+                        📋 دخلت الصفقة — احفظ البيانات
+                      </button>
                       {executedTrades[sig.symbol] ? (
                         <div className="px-6 py-3 rounded-xl font-bold text-sm text-center bg-bullish/20 text-bullish border border-bullish/30">
                           ✅ تم إرسال الأمر لـ MT5
