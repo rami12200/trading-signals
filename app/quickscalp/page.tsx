@@ -880,7 +880,7 @@ export default function QuickScalpPage() {
                             e.stopPropagation()
                             setExecutingTrade(sig.symbol)
                             try {
-                              const res = await fetch('/api/signals/execute', {
+                              const res = await fetch('/api/signals/latest', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({

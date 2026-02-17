@@ -19,6 +19,22 @@ import {
 // === API Key validation (temporary - will use Supabase later) ===
 const EA_API_KEY = process.env.EA_API_KEY || 'ts_ea_test_key_2026_rami12200'
 
+// === Manual order queue (shared in this module) ===
+interface TradeOrder {
+  id: string
+  symbol: string
+  mt5Symbol: string
+  action: 'BUY' | 'SELL'
+  entry: number
+  stopLoss: number
+  takeProfit: number
+  status: 'PENDING' | 'EXECUTED' | 'FAILED'
+  createdAt: string
+  executedAt?: string
+}
+
+const orderQueue: TradeOrder[] = []
+
 function validateApiKey(request: Request): boolean {
   const authHeader = request.headers.get('authorization')
   if (authHeader?.startsWith('Bearer ')) {
@@ -217,6 +233,70 @@ function isRateLimited(key: string): boolean {
 }
 
 // === GET /api/signals/latest ===
+// === POST: User clicks "Execute Trade" on website → saves order to queue ===
+export async function POST(request: Request) {
+  try {
+    const body = await request.json()
+    const { symbol, action, entry, stopLoss, takeProfit } = body
+
+    if (!symbol || !action || !entry) {
+      return NextResponse.json(
+        { success: false, error: 'Missing required fields: symbol, action, entry' },
+        { status: 400 }
+      )
+    }
+
+    if (action !== 'BUY' && action !== 'SELL') {
+      return NextResponse.json(
+        { success: false, error: 'Action must be BUY or SELL' },
+        { status: 400 }
+      )
+    }
+
+    const mt5Symbol = symbol.replace('USDT', 'USD')
+
+    const order: TradeOrder = {
+      id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+      symbol,
+      mt5Symbol,
+      action,
+      entry: parseFloat(entry),
+      stopLoss: parseFloat(stopLoss) || 0,
+      takeProfit: parseFloat(takeProfit) || 0,
+      status: 'PENDING',
+      createdAt: new Date().toISOString(),
+    }
+
+    orderQueue.push(order)
+
+    // Keep only last 50 orders
+    if (orderQueue.length > 50) {
+      orderQueue.splice(0, orderQueue.length - 50)
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: 'Trade order queued successfully',
+      order: {
+        id: order.id,
+        symbol: order.symbol,
+        mt5Symbol: order.mt5Symbol,
+        action: order.action,
+        entry: order.entry,
+        stopLoss: order.stopLoss,
+        takeProfit: order.takeProfit,
+        status: order.status,
+      },
+    })
+  } catch {
+    return NextResponse.json(
+      { success: false, error: 'Invalid request body' },
+      { status: 400 }
+    )
+  }
+}
+
+// === GET: EA polls for pending orders OR auto signals ===
 export async function GET(request: Request) {
   // Validate API Key
   if (!validateApiKey(request)) {
@@ -234,11 +314,38 @@ export async function GET(request: Request) {
     )
   }
 
+  const { searchParams } = new URL(request.url)
+  const mode = searchParams.get('mode') // 'orders' for manual orders
+  const markExecuted = searchParams.get('executed') // order ID to mark done
+
+  // === Mode: Manual Orders (EA polls for user-clicked trades) ===
+  if (mode === 'orders') {
+    // Mark order as executed if ID provided
+    if (markExecuted) {
+      const order = orderQueue.find((o) => o.id === markExecuted)
+      if (order) {
+        order.status = 'EXECUTED'
+        order.executedAt = new Date().toISOString()
+        return NextResponse.json({ success: true, message: 'Order marked as executed' })
+      }
+      return NextResponse.json({ success: false, error: 'Order not found' }, { status: 404 })
+    }
+
+    // Return pending orders
+    const pendingOrders = orderQueue.filter((o) => o.status === 'PENDING')
+    return NextResponse.json({
+      success: true,
+      count: pendingOrders.length,
+      orders: pendingOrders,
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  // === Mode: Auto Signals (default) ===
   try {
-    const { searchParams } = new URL(request.url)
     const interval = searchParams.get('interval') || '5m'
     const symbolParam = searchParams.get('symbol')
-    const qualityFilter = searchParams.get('quality') // STRONG, NORMAL, or empty for all
+    const qualityFilter = searchParams.get('quality')
 
     const symbols = symbolParam ? [symbolParam] : CRYPTO_PAIRS
 
@@ -256,12 +363,10 @@ export async function GET(request: Request) {
     const results = await Promise.all(promises)
     let signals: EASignal[] = results.filter((r): r is EASignal => r !== null)
 
-    // Filter by quality if specified
     if (qualityFilter) {
       signals = signals.filter((s) => s.signalQuality === qualityFilter.toUpperCase())
     }
 
-    // Sort: STRONG first, then NORMAL, then WEAK
     const qualityOrder = { STRONG: 0, NORMAL: 1, WEAK: 2 }
     signals.sort((a, b) => qualityOrder[a.signalQuality] - qualityOrder[b.signalQuality])
 

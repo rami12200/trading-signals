@@ -170,19 +170,8 @@ void OnTick()
 //+------------------------------------------------------------------+
 void FetchAndProcessSignals()
 {
-   // Build URL - use execute endpoint for manual orders
-   string baseUrl = InpApiUrl;
-   // Replace /signals/latest with /signals/execute if needed
-   if(StringFind(baseUrl, "/signals/latest") >= 0)
-   {
-      StringReplace(baseUrl, "/signals/latest", "/signals/execute");
-   }
-   else if(StringFind(baseUrl, "/signals/execute") < 0)
-   {
-      baseUrl = baseUrl + "/execute";
-   }
-   
-   string url = baseUrl + "?key=" + InpApiKey;
+   // Use the same /signals/latest URL with mode=orders for manual orders
+   string url = InpApiUrl + "?key=" + InpApiKey + "&mode=orders";
    
    // Prepare request
    char   postData[];
@@ -236,7 +225,7 @@ void FetchAndProcessSignals()
       if(executed)
       {
          // Mark order as executed on server
-         MarkOrderExecuted(baseUrl, signals[i].orderId);
+         MarkOrderExecuted("", signals[i].orderId);
       }
    }
 }
@@ -355,11 +344,11 @@ int ParseOrders(string json, Signal &signals[])
 //+------------------------------------------------------------------+
 //| Mark order as executed on server                                  |
 //+------------------------------------------------------------------+
-void MarkOrderExecuted(string baseUrl, string orderId)
+void MarkOrderExecuted(string baseUrl_unused, string orderId)
 {
    if(orderId == "") return;
    
-   string url = baseUrl + "?key=" + InpApiKey + "&executed=" + orderId;
+   string url = InpApiUrl + "?key=" + InpApiKey + "&mode=orders&executed=" + orderId;
    
    char   postData[];
    char   result[];
