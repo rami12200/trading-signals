@@ -216,7 +216,6 @@ export default function QuickScalpPage() {
   }
 
   const openTrade = (sig: QuickScalpSignal) => {
-    if (hasActiveTrade(sig.symbol)) return
     const livePrice = getLivePrice(sig.symbol, sig.price)
     const trade: MyTrade = {
       id: `trade-${sig.symbol}-${Date.now()}`,
@@ -855,21 +854,6 @@ export default function QuickScalpPage() {
                   {/* Trade Action Buttons */}
                   {(sig.action === 'BUY' || sig.action === 'SELL') && (
                     <div className="mt-4 flex flex-col sm:flex-row justify-center gap-3">
-                      {hasActiveTrade(sig.symbol) ? (
-                        <div className="px-6 py-3 rounded-xl font-bold text-sm bg-surface border border-white/10 text-neutral-500 text-center">
-                          ✅ أنت داخل صفقة على {sig.displaySymbol}
-                        </div>
-                      ) : (
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            openTrade(sig)
-                          }}
-                          className="px-6 py-3 rounded-xl font-bold text-sm bg-accent hover:bg-accent/80 text-white transition-all shadow-lg shadow-accent/20"
-                        >
-                          📋 دخلت الصفقة — احفظ البيانات
-                        </button>
-                      )}
                       {executedTrades[sig.symbol] ? (
                         <div className="px-6 py-3 rounded-xl font-bold text-sm text-center bg-bullish/20 text-bullish border border-bullish/30">
                           ✅ تم إرسال الأمر لـ MT5
@@ -895,6 +879,8 @@ export default function QuickScalpPage() {
                               if (data.success) {
                                 setExecutedTrades((prev) => ({ ...prev, [sig.symbol]: true }))
                                 setTimeout(() => setExecutedTrades((prev) => ({ ...prev, [sig.symbol]: false })), 10000)
+                                // Also save trade to local trades list
+                                openTrade(sig)
                               } else {
                                 alert('فشل إرسال الأمر: ' + (data.error || 'خطأ غير معروف'))
                               }
