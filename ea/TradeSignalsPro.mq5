@@ -23,7 +23,7 @@ input string   InpInterval     = "5m";                  // Candle interval (5m, 
 
 input group "=== Trading Settings ==="
 input double   InpLotSize      = 0.1;                   // Lot size
-input int      InpMaxTrades    = 3;                     // Max open trades
+input int      InpMaxTrades    = 5;                     // Max open trades
 input int      InpSlippage     = 30;                    // Max slippage (points)
 input bool     InpUseSignalSLTP = true;                 // Use SL/TP from signal
 input double   InpManualSL     = 0;                     // Manual SL (points, 0=disabled)
@@ -190,7 +190,7 @@ void FetchAndProcessSignals()
       if(err == 4014)
       {
          Print("ERROR: WebRequest not allowed! Add this URL to Tools > Options > Expert Advisors > Allow WebRequest:");
-         Print(baseUrl);
+         Print(InpApiUrl);
       }
       else
       {
@@ -454,18 +454,23 @@ bool ProcessSignal(Signal &sig)
          return false;
    }
    
-   // Check if we already have a position on this symbol
-   if(HasOpenPosition(brokerSymbol))
-   {
-      Print("Already have position on ", brokerSymbol, " - skipping");
-      return false;
-   }
-   
-   // Check max trades limit
+   // Check max trades limit (total across all symbols)
    if(CountOpenPositions() >= InpMaxTrades)
    {
       Print("Max trades reached (", InpMaxTrades, ") - skipping");
       return false;
+   }
+   
+   // Check price deviation - reject if price moved more than 0.5% from signal entry
+   if(sig.price > 0)
+   {
+      double currentMid = (checkBid + checkAsk) / 2.0;
+      double deviation = MathAbs(currentMid - sig.price) / sig.price * 100.0;
+      if(deviation > 0.5)
+      {
+         Print("Price deviation too high for ", brokerSymbol, ": signal=", sig.price, " current=", currentMid, " dev=", DoubleToString(deviation, 2), "%");
+         return false;
+      }
    }
    
    // Execute trade

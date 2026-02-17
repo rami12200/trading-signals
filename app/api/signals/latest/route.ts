@@ -34,6 +34,22 @@ interface TradeOrder {
 }
 
 const orderQueue: TradeOrder[] = []
+const ORDER_EXPIRY_MS = 30_000 // 30 seconds - orders expire after this
+
+// Clean expired orders
+function cleanExpiredOrders() {
+  const now = Date.now()
+  for (let i = orderQueue.length - 1; i >= 0; i--) {
+    const orderAge = now - new Date(orderQueue[i].createdAt).getTime()
+    if (orderQueue[i].status === 'PENDING' && orderAge > ORDER_EXPIRY_MS) {
+      orderQueue[i].status = 'FAILED' // Mark as expired
+    }
+    // Remove old executed/failed orders (older than 5 minutes)
+    if (orderQueue[i].status !== 'PENDING' && orderAge > 300_000) {
+      orderQueue.splice(i, 1)
+    }
+  }
+}
 
 function validateApiKey(request: Request): boolean {
   const authHeader = request.headers.get('authorization')
@@ -331,7 +347,10 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: false, error: 'Order not found' }, { status: 404 })
     }
 
-    // Return pending orders
+    // Clean expired orders first
+    cleanExpiredOrders()
+
+    // Return only valid pending orders (not expired)
     const pendingOrders = orderQueue.filter((o) => o.status === 'PENDING')
     return NextResponse.json({
       success: true,
