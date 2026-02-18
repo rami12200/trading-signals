@@ -40,6 +40,9 @@ input string   InpSymbolPrefix = "";                    // Broker symbol prefix 
 input group "=== Risk Management ==="
 input double   InpMaxDailyLoss = 0;                     // Max daily loss $ (0=disabled)
 input int      InpMaxDailyTrades = 0;                   // Max trades per day (0=unlimited)
+input bool     InpUseTrailing  = true;                   // Use Trailing Stop
+input double   InpTrailStartPct = 50.0;                  // Trailing start (% of SL distance)
+input double   InpTrailDistPct  = 70.0;                  // Trailing distance (% of SL distance)
 
 input group "=== Display ==="
 input int      InpMagicNumber  = 202601;                // Magic number
@@ -163,6 +166,10 @@ void OnTick()
 {
    // Update daily PnL
    UpdateDailyPnL();
+   
+   // Manage trailing stop for open positions
+   if(InpUseTrailing)
+      ManageTrailingStop();
 }
 
 //+------------------------------------------------------------------+
@@ -594,6 +601,72 @@ bool ExecuteSell(string symbol, Signal &sig)
       Print("❌ SELL FAILED: ", symbol, " Error=", GetLastError(), " RetCode=", trade.ResultRetcode());
       totalErrors++;
       return false;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Manage Trailing Stop for all open positions                       |
+//+------------------------------------------------------------------+
+void ManageTrailingStop()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(!posInfo.SelectByIndex(i)) continue;
+      if(posInfo.Magic() != InpMagicNumber) continue;
+      
+      string sym = posInfo.Symbol();
+      double openPrice = posInfo.PriceOpen();
+      double currentSL = posInfo.StopLoss();
+      double currentTP = posInfo.TakeProfit();
+      int digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+      
+      // Skip if no SL set (can't calculate trail distance)
+      if(currentSL == 0) continue;
+      
+      // Calculate SL distance from entry
+      double slDistance = MathAbs(openPrice - currentSL);
+      
+      // Trail activation: profit must exceed X% of SL distance
+      double trailStartDist = slDistance * InpTrailStartPct / 100.0;
+      // Trail distance: how far behind price the new SL follows
+      double trailDist = slDistance * InpTrailDistPct / 100.0;
+      
+      if(posInfo.PositionType() == POSITION_TYPE_BUY)
+      {
+         double bid = SymbolInfoDouble(sym, SYMBOL_BID);
+         double profit = bid - openPrice;
+         
+         // Only start trailing after minimum profit reached
+         if(profit < trailStartDist) continue;
+         
+         // New SL = current price - trail distance
+         double newSL = NormalizeDouble(bid - trailDist, digits);
+         
+         // Only move SL up, never down
+         if(newSL > currentSL)
+         {
+            if(trade.PositionModify(posInfo.Ticket(), newSL, currentTP))
+               Print("📈 Trailing BUY ", sym, ": SL moved ", currentSL, " → ", newSL, " (bid=", bid, ")");
+         }
+      }
+      else if(posInfo.PositionType() == POSITION_TYPE_SELL)
+      {
+         double ask = SymbolInfoDouble(sym, SYMBOL_ASK);
+         double profit = openPrice - ask;
+         
+         // Only start trailing after minimum profit reached
+         if(profit < trailStartDist) continue;
+         
+         // New SL = current price + trail distance
+         double newSL = NormalizeDouble(ask + trailDist, digits);
+         
+         // Only move SL down, never up
+         if(currentSL == 0 || newSL < currentSL)
+         {
+            if(trade.PositionModify(posInfo.Ticket(), newSL, currentTP))
+               Print("📉 Trailing SELL ", sym, ": SL moved ", currentSL, " → ", newSL, " (ask=", ask, ")");
+         }
+      }
    }
 }
 
