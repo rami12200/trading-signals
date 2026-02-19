@@ -97,7 +97,7 @@ function toMT5Symbol(binanceSymbol: string): string {
 }
 
 // === Analyze signal for EA ===
-function analyzeForEA(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL'): EASignal | null {
+function analyzeForEA(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL', mtfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL'): EASignal | null {
   if (candles.length < 50) return null
 
   const closes = candles.map((c) => c.close)
@@ -172,10 +172,10 @@ function analyzeForEA(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'DOWN' 
     }
   }
 
-  // HTF TREND FILTER: Block trades against the bigger trend
-  if (htfTrend === 'UP' && action === 'SELL') {
+  // DUAL TREND FILTER: Block trades if EITHER 15m or 1h trend is against us
+  if ((htfTrend === 'UP' || mtfTrend === 'UP') && action === 'SELL') {
     action = 'NONE'
-  } else if (htfTrend === 'DOWN' && action === 'BUY') {
+  } else if ((htfTrend === 'DOWN' || mtfTrend === 'DOWN') && action === 'BUY') {
     action = 'NONE'
   }
 
@@ -394,6 +394,25 @@ export async function GET(request: Request) {
         if (rawKlines.length < 50) return null
         const candles = parseKlines(rawKlines)
 
+        // Get mid timeframe (15m) for fast trend detection
+        let mtfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL'
+        try {
+          const mtfKlines = await getCachedKlines(symbol, '15m', 50)
+          if (mtfKlines.length >= 30) {
+            const mtfCandles = parseKlines(mtfKlines)
+            const mtfCloses = mtfCandles.map((c: OHLCV) => c.close)
+            const mtfEma9 = calcEMA(mtfCloses, 9)
+            const mtfEma21 = calcEMA(mtfCloses, 21)
+            if (mtfEma9.length > 0 && mtfEma21.length > 0) {
+              const e9 = mtfEma9[mtfEma9.length - 1]
+              const e21 = mtfEma21[mtfEma21.length - 1]
+              const mtfPrice = mtfCloses[mtfCloses.length - 1]
+              if (e9 > e21 && mtfPrice > e9) mtfTrend = 'UP'
+              else if (e9 < e21 && mtfPrice < e9) mtfTrend = 'DOWN'
+            }
+          }
+        } catch {}
+
         // Get higher timeframe (1h) for trend filter
         let htfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL'
         try {
@@ -413,7 +432,7 @@ export async function GET(request: Request) {
           }
         } catch {}
 
-        return analyzeForEA(candles, symbol, htfTrend)
+        return analyzeForEA(candles, symbol, htfTrend, mtfTrend)
       } catch {
         return null
       }

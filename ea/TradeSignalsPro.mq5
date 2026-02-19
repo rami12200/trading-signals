@@ -468,6 +468,14 @@ bool ProcessSignal(Signal &sig)
       return false;
    }
    
+   // Check max 2 trades per symbol
+   int symbolCount = CountSymbolPositions(brokerSymbol);
+   if(symbolCount >= 2)
+   {
+      Print("Max 2 trades per symbol reached for ", brokerSymbol, " (", symbolCount, ") - skipping");
+      return false;
+   }
+   
    // Check price deviation - reject if price moved more than 0.5% from signal entry
    if(sig.price > 0)
    {
@@ -697,6 +705,23 @@ int CountOpenPositions()
       if(posInfo.SelectByIndex(i))
       {
          if(posInfo.Magic() == InpMagicNumber)
+            count++;
+      }
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
+//| Count open positions on a specific symbol by this EA              |
+//+------------------------------------------------------------------+
+int CountSymbolPositions(string symbol)
+{
+   int count = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(posInfo.SelectByIndex(i))
+      {
+         if(posInfo.Symbol() == symbol && posInfo.Magic() == InpMagicNumber)
             count++;
       }
    }

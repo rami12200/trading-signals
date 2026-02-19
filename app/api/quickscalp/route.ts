@@ -83,7 +83,7 @@ interface QuickScalpSignal {
   timestamp: string
 }
 
-function analyzeQuickScalp(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL'): QuickScalpSignal | null {
+function analyzeQuickScalp(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL', mtfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL'): QuickScalpSignal | null {
   if (candles.length < 50) return null
 
   const closes = candles.map((c) => c.close)
@@ -319,21 +319,23 @@ function analyzeQuickScalp(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'D
   }
 
   // ============================================
-  // 🔴 HIGHER TIMEFRAME TREND FILTER (CRITICAL)
-  // Block trades that go against the bigger trend
+  // 🔴 DUAL TREND FILTER (15m + 1h)
+  // Block trades if EITHER timeframe is against us
   // ============================================
-  if (htfTrend === 'UP' && (action === 'SELL')) {
+  if ((htfTrend === 'UP' || mtfTrend === 'UP') && (action === 'SELL')) {
     action = 'WAIT'
-    reason = 'الترند العام صاعد (1 ساعة) — ممنوع البيع'
+    reason = 'الترند صاعد — ممنوع البيع'
     reasons.length = 0
-    reasons.push('الترند على فريم الساعة صاعد')
+    if (mtfTrend === 'UP') reasons.push('📈 الترند على فريم 15 دقيقة صاعد')
+    if (htfTrend === 'UP') reasons.push('📈 الترند على فريم الساعة صاعد')
     reasons.push('البيع ضد الترند = خطر عالي')
     reasons.push('انتظر إشارة شراء مع الترند')
-  } else if (htfTrend === 'DOWN' && (action === 'BUY')) {
+  } else if ((htfTrend === 'DOWN' || mtfTrend === 'DOWN') && (action === 'BUY')) {
     action = 'WAIT'
-    reason = 'الترند العام هابط (1 ساعة) — ممنوع الشراء'
+    reason = 'الترند هابط — ممنوع الشراء'
     reasons.length = 0
-    reasons.push('الترند على فريم الساعة هابط')
+    if (mtfTrend === 'DOWN') reasons.push('📉 الترند على فريم 15 دقيقة هابط')
+    if (htfTrend === 'DOWN') reasons.push('📉 الترند على فريم الساعة هابط')
     reasons.push('الشراء ضد الترند = خطر عالي')
     reasons.push('انتظر إشارة بيع مع الترند')
   }
@@ -524,13 +526,32 @@ export async function GET(request: Request) {
 
     const signals: QuickScalpSignal[] = []
 
-    // Fetch and analyze each symbol with HTF trend filter
+    // Fetch and analyze each symbol with dual trend filter (15m + 1h)
     const promises = symbols.map(async (symbol) => {
       try {
         // Get main timeframe candles
         const rawKlines = await getCachedKlines(symbol, interval, 200)
         if (rawKlines.length < 50) return null
         const candles = parseKlines(rawKlines)
+
+        // Get mid timeframe (15m) for fast trend detection
+        let mtfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL'
+        try {
+          const mtfKlines = await getCachedKlines(symbol, '15m', 50)
+          if (mtfKlines.length >= 30) {
+            const mtfCandles = parseKlines(mtfKlines)
+            const mtfCloses = mtfCandles.map((c: OHLCV) => c.close)
+            const mtfEma9 = calcEMA(mtfCloses, 9)
+            const mtfEma21 = calcEMA(mtfCloses, 21)
+            if (mtfEma9.length > 0 && mtfEma21.length > 0) {
+              const e9 = mtfEma9[mtfEma9.length - 1]
+              const e21 = mtfEma21[mtfEma21.length - 1]
+              const mtfPrice = mtfCloses[mtfCloses.length - 1]
+              if (e9 > e21 && mtfPrice > e9) mtfTrend = 'UP'
+              else if (e9 < e21 && mtfPrice < e9) mtfTrend = 'DOWN'
+            }
+          }
+        } catch {}
 
         // Get higher timeframe (1h) for trend filter
         let htfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL'
@@ -545,14 +566,13 @@ export async function GET(request: Request) {
               const e9 = htfEma9[htfEma9.length - 1]
               const e21 = htfEma21[htfEma21.length - 1]
               const htfPrice = htfCloses[htfCloses.length - 1]
-              // Strong trend: EMA9 > EMA21 AND price above both
               if (e9 > e21 && htfPrice > e9) htfTrend = 'UP'
               else if (e9 < e21 && htfPrice < e9) htfTrend = 'DOWN'
             }
           }
         } catch {}
 
-        return analyzeQuickScalp(candles, symbol, htfTrend)
+        return analyzeQuickScalp(candles, symbol, htfTrend, mtfTrend)
       } catch {
         return null
       }
