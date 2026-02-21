@@ -237,7 +237,7 @@ export default function HomePage() {
         <div className="absolute inset-0 bg-gradient-to-r from-accent/10 via-purple-500/10 to-accent/10" />
         <div className="relative max-w-3xl mx-auto px-4 text-center">
           <h2 className="text-3xl md:text-4xl font-bold mb-4">جاهز تبدأ التداول الذكي؟</h2>
-          <p className="text-neutral-400 mb-8 text-lg">انضم لأكثر من 2,500 متداول يستخدمون TradeSignals Pro</p>
+          <p className="text-neutral-400 mb-8 text-lg">انضم لأكثر من 2,500 متداول يستخدمون مؤشر القبس</p>
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
             <Link href="/register" className="btn-primary text-base px-10 py-4 shadow-lg shadow-accent/20">
               أنشئ حسابك مجاناً

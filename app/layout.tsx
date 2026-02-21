@@ -6,8 +6,8 @@ import Link from 'next/link'
 const cairo = Cairo({ subsets: ['arabic', 'latin'], weight: ['400', '500', '600', '700'] })
 
 export const metadata: Metadata = {
-  title: 'TradeSignals Pro — توصيات التداول الذكية',
-  description: 'منصة توصيات تداول احترافية بتحليل فني حقيقي — Crypto و Forex',
+  title: 'مؤشر القبس 🔥 — توصيات التداول الذكية',
+  description: 'مؤشر القبس — منصة توصيات تداول احترافية بتحليل فني حقيقي — Crypto و Forex',
 }
 
 export default function RootLayout({
@@ -26,7 +26,7 @@ export default function RootLayout({
                 href="/"
                 className="text-xl font-bold text-gradient"
               >
-                TradeSignals Pro
+                🔥 مؤشر القبس
               </Link>
 
               {/* Desktop Nav */}
@@ -38,6 +38,7 @@ export default function RootLayout({
                 <NavLink href="/daily">يومي</NavLink>
                 <NavLink href="/weekly">أسبوعي</NavLink>
                 <NavLink href="/markets">الأسواق</NavLink>
+                <NavLink href="/premium">🔥 بريميوم</NavLink>
               </nav>
 
               <div className="flex items-center gap-2">
@@ -68,9 +69,9 @@ export default function RootLayout({
             <div className="max-w-7xl mx-auto px-4 py-12">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
                 <div>
-                  <h3 className="font-bold mb-3 text-gradient">TradeSignals Pro</h3>
+                  <h3 className="font-bold mb-3 text-gradient">🔥 مؤشر القبس</h3>
                   <p className="text-sm text-neutral-400 leading-relaxed">
-                    منصة توصيات تداول احترافية بتحليل فني حقيقي وبيانات مباشرة من Binance
+                    مؤشر القبس — منصة توصيات تداول احترافية بتحليل فني حقيقي وبيانات مباشرة
                   </p>
                 </div>
                 <div>
@@ -96,7 +97,7 @@ export default function RootLayout({
                 </div>
               </div>
               <div className="border-t border-white/[0.06] mt-8 pt-8 text-center text-xs text-neutral-500">
-                © {new Date().getFullYear()} TradeSignals Pro — جميع الحقوق محفوظة
+                © {new Date().getFullYear()} مؤشر القبس — جميع الحقوق محفوظة
               </div>
             </div>
           </footer>
@@ -136,6 +137,7 @@ function MobileMenu() {
           <MobileNavLink href="/daily">يومي</MobileNavLink>
           <MobileNavLink href="/weekly">أسبوعي</MobileNavLink>
           <MobileNavLink href="/markets">الأسواق</MobileNavLink>
+          <MobileNavLink href="/premium">🔥 بريميوم</MobileNavLink>
           <div className="border-t border-white/[0.06] my-1" />
           <MobileNavLink href="/profile">حسابي</MobileNavLink>
           <MobileNavLink href="/login">تسجيل الدخول</MobileNavLink>
