@@ -1,70 +1,45 @@
-import Link from 'next/link'
-import { PricingPlan } from '@/lib/types'
+'use client'
 
-const plans: PricingPlan[] = [
-  {
-    name: 'مجاني',
-    nameEn: 'Free',
-    price: 0,
-    period: 'مجاني للأبد',
-    description: 'ابدأ بتجربة المنصة',
-    features: [
-      'إشارات أساسية (3 عملات)',
-      'تحديث كل دقيقة',
-      'مؤشر RSI و EMA',
-      'حالة الأسواق',
-    ],
-    notIncluded: [
-      'مؤشر القبس المتقدم',
-      'Smart Money (BoS)',
-      'تنبيهات فورية',
-      'دعم أولوية',
-    ],
-    cta: 'ابدأ مجاناً',
-    popular: false,
-  },
-  {
-    name: 'برو',
-    nameEn: 'Pro',
-    price: 29,
-    period: 'شهرياً',
-    description: 'للمتداول الجاد',
-    features: [
-      'كل إشارات 6 عملات',
-      'تحديث كل 15 ثانية',
-      'كل المؤشرات الفنية',
-      'مؤشر القبس المتقدم',
-      'Smart Money (BoS)',
-      'حاسبة الصفقات',
-    ],
-    notIncluded: [
-      'تنبيهات فورية',
-      'دعم أولوية',
-    ],
-    cta: 'اشترك الآن',
-    popular: true,
-  },
-  {
-    name: 'VIP',
-    nameEn: 'VIP',
-    price: 79,
-    period: 'شهرياً',
-    description: 'كل شيء + دعم مباشر',
-    features: [
-      'كل مميزات برو',
-      'تنبيهات فورية (Telegram)',
-      'دعم أولوية 24/7',
-      'تحليل يومي مخصص',
-      'جلسة استشارية شهرية',
-      'وصول مبكر للمميزات الجديدة',
-    ],
-    notIncluded: [],
-    cta: 'اشترك VIP',
-    popular: false,
-  },
-]
+import { useEffect, useState } from 'react'
+import Link from 'next/link'
+
+interface Plan {
+  id: string
+  name: string
+  slug: string
+  price: number
+  currency: string
+  interval: string
+  features: string[]
+  is_active: boolean
+  sort_order: number
+}
 
 export default function PricingPage() {
+  const [plans, setPlans] = useState<Plan[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetch('/api/admin/plans')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.plans) setPlans(data.plans)
+      })
+      .finally(() => setLoading(false))
+  }, [])
+
+  const intervalLabel = (interval: string) => {
+    if (interval === 'month') return 'شهرياً'
+    if (interval === 'year') return 'سنوياً'
+    return 'مدى الحياة'
+  }
+
+  const ctaLabel = (slug: string) => {
+    if (slug === 'free') return 'ابدأ مجاناً'
+    if (slug === 'vip') return 'اشترك VIP'
+    return 'اشترك الآن'
+  }
+
   return (
     <main className="max-w-5xl mx-auto px-4 py-16">
       <div className="text-center mb-12">
@@ -72,17 +47,20 @@ export default function PricingPage() {
         <p className="text-neutral-400">اختر الخطة المناسبة لأسلوب تداولك</p>
       </div>
 
+      {loading ? (
+        <div className="text-center py-20 text-neutral-400">جاري التحميل...</div>
+      ) : (
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {plans.map((plan) => (
           <div
-            key={plan.nameEn}
+            key={plan.id}
             className={`card relative ${
-              plan.popular
+              plan.slug === 'pro'
                 ? 'border-accent/40 shadow-lg shadow-accent/10 scale-[1.02]'
                 : ''
             }`}
           >
-            {plan.popular && (
+            {plan.slug === 'pro' && (
               <div className="absolute -top-3 right-4 px-3 py-1 bg-accent text-white text-xs rounded-full font-semibold">
                 الأكثر شعبية
               </div>
@@ -90,45 +68,41 @@ export default function PricingPage() {
 
             <div className="mb-6">
               <h3 className="text-lg font-bold">{plan.name}</h3>
-              <p className="text-xs text-neutral-500">{plan.description}</p>
+              <p className="text-xs text-neutral-500">{plan.slug.toUpperCase()}</p>
             </div>
 
             <div className="mb-6">
               <span className="text-4xl font-bold">
-                {plan.price === 0 ? 'مجاني' : `$${plan.price}`}
+                {plan.price === 0 ? 'مجاني' : `${plan.currency === 'SAR' ? '﷼' : '$'}${plan.price}`}
               </span>
               {plan.price > 0 && (
-                <span className="text-sm text-neutral-500 mr-1">/{plan.period}</span>
+                <span className="text-sm text-neutral-500 mr-1">/{intervalLabel(plan.interval)}</span>
               )}
             </div>
 
             <div className="space-y-2.5 mb-8">
-              {plan.features.map((f) => (
-                <div key={f} className="flex items-center gap-2 text-sm">
+              {plan.features.map((f, i) => (
+                <div key={i} className="flex items-center gap-2 text-sm">
                   <span className="text-bullish text-xs">✓</span>
                   <span>{f}</span>
                 </div>
               ))}
-              {plan.notIncluded.map((f) => (
-                <div key={f} className="flex items-center gap-2 text-sm text-neutral-600">
-                  <span className="text-xs">✗</span>
-                  <span className="line-through">{f}</span>
-                </div>
-              ))}
             </div>
 
-            <button
-              className={`w-full py-3 rounded-xl font-semibold text-sm transition-all ${
-                plan.popular
+            <Link
+              href={plan.slug === 'free' ? '/register' : '/register'}
+              className={`block text-center w-full py-3 rounded-xl font-semibold text-sm transition-all ${
+                plan.slug === 'pro'
                   ? 'btn-primary'
                   : 'btn-secondary'
               }`}
             >
-              {plan.cta}
-            </button>
+              {ctaLabel(plan.slug)}
+            </Link>
           </div>
         ))}
       </div>
+      )}
 
       {/* FAQ */}
       <div className="mt-20">

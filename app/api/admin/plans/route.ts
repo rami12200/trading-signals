@@ -58,6 +58,7 @@ export async function POST(request: Request) {
       interval: body.interval || 'month',
       paddle_price_id: body.paddle_price_id || null,
       features: body.features || [],
+      permissions: body.permissions || {},
       is_active: body.is_active ?? true,
       sort_order: body.sort_order || 0,
     })
@@ -85,6 +86,7 @@ export async function PUT(request: Request) {
       interval: body.interval,
       paddle_price_id: body.paddle_price_id,
       features: body.features,
+      permissions: body.permissions,
       is_active: body.is_active,
       sort_order: body.sort_order,
       updated_at: new Date().toISOString(),

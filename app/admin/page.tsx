@@ -5,6 +5,15 @@ import { useAuth } from '@/components/AuthProvider'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
+interface PlanPermissions {
+  pages: string[]
+  max_pairs: number
+  refresh_seconds: number
+  alerts: boolean
+  ea_access: boolean
+  api_access: boolean
+}
+
 interface Plan {
   id: string
   name: string
@@ -14,8 +23,29 @@ interface Plan {
   interval: string
   paddle_price_id: string | null
   features: string[]
+  permissions: PlanPermissions
   is_active: boolean
   sort_order: number
+}
+
+const ALL_PAGES = [
+  { value: 'markets', label: 'حالة الأسواق' },
+  { value: 'quickscalp', label: 'السكالبينج السريع' },
+  { value: 'qabas', label: 'مؤشر القبس' },
+  { value: 'signals', label: 'جدول الإشارات' },
+  { value: 'scalping', label: 'المضاربة اللحظية' },
+  { value: 'daily', label: 'التوصيات اليومية' },
+  { value: 'weekly', label: 'التحليل الأسبوعي' },
+  { value: 'premium', label: 'بريميوم + MT5' },
+]
+
+const DEFAULT_PERMISSIONS: PlanPermissions = {
+  pages: [],
+  max_pairs: 3,
+  refresh_seconds: 60,
+  alerts: false,
+  ea_access: false,
+  api_access: false,
 }
 
 interface User {
@@ -230,6 +260,7 @@ function PlansTab({
               interval: 'month',
               paddle_price_id: '',
               features: [],
+              permissions: { ...DEFAULT_PERMISSIONS },
               is_active: true,
               sort_order: plans.length,
             })
@@ -301,6 +332,7 @@ function PlanForm({
 }) {
   const [form, setForm] = useState(plan)
   const [featuresText, setFeaturesText] = useState(plan.features.join('\n'))
+  const [perms, setPerms] = useState<PlanPermissions>(plan.permissions || { ...DEFAULT_PERMISSIONS })
 
   return (
     <div className="card mb-6 border-accent/20">
@@ -390,20 +422,99 @@ function PlanForm({
         </div>
       </div>
       <div className="mt-4">
-        <label className="text-sm text-neutral-400 mb-1 block">المميزات (سطر لكل ميزة)</label>
+        <label className="text-sm text-neutral-400 mb-1 block">المميزات (سطر لكل ميزة) — نصوص تظهر في صفحة الأسعار</label>
         <textarea
           value={featuresText}
           onChange={(e) => setFeaturesText(e.target.value)}
-          rows={5}
+          rows={4}
           className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm"
           placeholder="إشارات لحظية فورية&#10;جميع العملات (10+)&#10;تنبيهات صوتية"
         />
       </div>
+
+      {/* Permissions Editor */}
+      <div className="mt-6 border-t border-white/10 pt-4">
+        <h4 className="font-bold text-sm mb-3">🔐 الصلاحيات الفعلية</h4>
+        
+        <div className="mb-4">
+          <label className="text-sm text-neutral-400 mb-2 block">الصفحات المتاحة</label>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {ALL_PAGES.map((page) => (
+              <label key={page.value} className="flex items-center gap-2 text-sm bg-white/5 rounded-lg px-3 py-2 cursor-pointer hover:bg-white/10 transition-all">
+                <input
+                  type="checkbox"
+                  checked={perms.pages.includes(page.value)}
+                  onChange={(e) => {
+                    const newPages = e.target.checked
+                      ? [...perms.pages, page.value]
+                      : perms.pages.filter((p: string) => p !== page.value)
+                    setPerms({ ...perms, pages: newPages })
+                  }}
+                  className="w-4 h-4"
+                />
+                {page.label}
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+          <div>
+            <label className="text-sm text-neutral-400 mb-1 block">عدد العملات</label>
+            <input
+              type="number"
+              value={perms.max_pairs}
+              onChange={(e) => setPerms({ ...perms, max_pairs: parseInt(e.target.value) || 3 })}
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm"
+            />
+          </div>
+          <div>
+            <label className="text-sm text-neutral-400 mb-1 block">سرعة التحديث (ثواني)</label>
+            <input
+              type="number"
+              value={perms.refresh_seconds}
+              onChange={(e) => setPerms({ ...perms, refresh_seconds: parseInt(e.target.value) || 60 })}
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm"
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-4">
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={perms.alerts}
+              onChange={(e) => setPerms({ ...perms, alerts: e.target.checked })}
+              className="w-4 h-4"
+            />
+            تنبيهات فورية
+          </label>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={perms.ea_access}
+              onChange={(e) => setPerms({ ...perms, ea_access: e.target.checked })}
+              className="w-4 h-4"
+            />
+            ربط MT5 / EA
+          </label>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={perms.api_access}
+              onChange={(e) => setPerms({ ...perms, api_access: e.target.checked })}
+              className="w-4 h-4"
+            />
+            API خاص
+          </label>
+        </div>
+      </div>
+
       <div className="flex gap-2 mt-4">
         <button
           onClick={() => {
             const features = featuresText.split('\n').map((f) => f.trim()).filter(Boolean)
-            onSave({ ...form, features })
+            onSave({ ...form, features, permissions: perms })
           }}
           className="btn-primary text-sm !px-6 !py-2"
         >

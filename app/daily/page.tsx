@@ -31,7 +31,7 @@ export default function DailyPage() {
   const neutralCount = signals.filter((s) => s.signal === 'NEUTRAL').length
 
   return (
-    <ProtectedPage requiredPlan="pro" featureName="التوصيات اليومية">
+    <ProtectedPage requiredPlan="pro" pageName="daily" featureName="التوصيات اليومية">
     <main className="max-w-7xl mx-auto px-4 py-8">
       <h1 className="text-2xl font-bold mb-1">التوصيات اليومية</h1>
       <p className="text-sm text-neutral-500 mb-6">تحليل على إطار الساعة — تحديث كل دقيقة</p>

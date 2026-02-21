@@ -39,7 +39,7 @@ export default function ScalpingPage() {
   const sellCount = signals.filter((s) => s.signal === 'SELL').length
 
   return (
-    <ProtectedPage requiredPlan="pro" featureName="المضاربة اللحظية">
+    <ProtectedPage requiredPlan="pro" pageName="scalping" featureName="المضاربة اللحظية">
     <main className="max-w-7xl mx-auto px-4 py-8">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
         <div>

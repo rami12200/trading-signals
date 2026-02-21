@@ -1,19 +1,31 @@
 'use client'
 
 import { useAuth } from './AuthProvider'
-import { hasAccess, UserPlan } from '@/lib/auth'
+import { hasAccess, getPlanPermissions, UserPlan, PlanPermissions } from '@/lib/auth'
 import Link from 'next/link'
+import { useEffect, useState } from 'react'
 
 interface ProtectedPageProps {
   children: React.ReactNode
   requiredPlan?: UserPlan
+  pageName?: string
   featureName?: string
 }
 
-export function ProtectedPage({ children, requiredPlan = 'free', featureName }: ProtectedPageProps) {
+export function ProtectedPage({ children, requiredPlan = 'free', pageName, featureName }: ProtectedPageProps) {
   const { user, loading } = useAuth()
+  const [perms, setPerms] = useState<PlanPermissions | null>(null)
+  const [checking, setChecking] = useState(true)
 
-  if (loading) {
+  useEffect(() => {
+    if (loading || !user) { setChecking(false); return }
+    getPlanPermissions(user.plan).then((p) => {
+      setPerms(p)
+      setChecking(false)
+    })
+  }, [user, loading])
+
+  if (loading || checking) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="text-center">
@@ -49,8 +61,11 @@ export function ProtectedPage({ children, requiredPlan = 'free', featureName }: 
     )
   }
 
-  // Logged in but wrong plan
-  if (!hasAccess(user.plan, requiredPlan)) {
+  // Check page-level permission from database
+  const hasPagePerm = pageName && perms ? perms.pages.includes(pageName) : true
+  const hasPlanLevel = hasAccess(user.plan, requiredPlan)
+
+  if (!hasPlanLevel || !hasPagePerm) {
     const planNames: Record<UserPlan, string> = {
       free: 'مجاني',
       pro: 'برو',
@@ -64,8 +79,8 @@ export function ProtectedPage({ children, requiredPlan = 'free', featureName }: 
           <h2 className="text-2xl font-bold mb-2">ترقية مطلوبة</h2>
           <p className="text-neutral-400 mb-2 text-sm">
             {featureName
-              ? `${featureName} متاحة فقط لمشتركي باقة ${planNames[requiredPlan]} وأعلى`
-              : `هذه الميزة تتطلب باقة ${planNames[requiredPlan]} وأعلى`}
+              ? `${featureName} غير متاحة في باقتك الحالية`
+              : 'هذه الميزة غير متاحة في باقتك الحالية'}
           </p>
           <p className="text-neutral-500 mb-6 text-xs">
             باقتك الحالية: <span className="text-accent font-bold">{planNames[user.plan]}</span>

@@ -30,7 +30,7 @@ export default function WeeklyPage() {
   const sellCount = signals.filter((s) => s.signal === 'SELL').length
 
   return (
-    <ProtectedPage requiredPlan="pro" featureName="التحليل الأسبوعي">
+    <ProtectedPage requiredPlan="pro" pageName="weekly" featureName="التحليل الأسبوعي">
     <main className="max-w-7xl mx-auto px-4 py-8">
       <h1 className="text-2xl font-bold mb-1">التحليل الأسبوعي</h1>
       <p className="text-sm text-neutral-500 mb-6">نظرة شاملة على اتجاه السوق</p>

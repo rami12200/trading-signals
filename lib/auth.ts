@@ -4,6 +4,15 @@ import { supabase } from './supabase'
 
 export type UserPlan = 'free' | 'pro' | 'vip'
 
+export interface PlanPermissions {
+  pages: string[]
+  max_pairs: number
+  refresh_seconds: number
+  alerts: boolean
+  ea_access: boolean
+  api_access: boolean
+}
+
 export interface UserProfile {
   id: string
   email: string
@@ -87,10 +96,38 @@ export async function getUserProfile(): Promise<UserProfile | null> {
   return data as UserProfile
 }
 
-// Check if user has access to a feature
+// Check if user has access to a feature (legacy level-based)
 export function hasAccess(plan: UserPlan, requiredPlan: UserPlan): boolean {
   const planLevel: Record<UserPlan, number> = { free: 0, pro: 1, vip: 2 }
   return planLevel[plan] >= planLevel[requiredPlan]
+}
+
+// Get plan permissions from database
+export async function getPlanPermissions(planSlug: UserPlan): Promise<PlanPermissions> {
+  const defaults: PlanPermissions = {
+    pages: ['markets', 'quickscalp'],
+    max_pairs: 3,
+    refresh_seconds: 60,
+    alerts: false,
+    ea_access: false,
+    api_access: false,
+  }
+
+  try {
+    const { data } = await supabase
+      .from('plans')
+      .select('permissions')
+      .eq('slug', planSlug)
+      .single()
+    if (data?.permissions) return { ...defaults, ...data.permissions }
+  } catch {}
+  return defaults
+}
+
+// Check if user has access to a specific page
+export async function hasPageAccess(plan: UserPlan, page: string): Promise<boolean> {
+  const perms = await getPlanPermissions(plan)
+  return perms.pages.includes(page)
 }
 
 // Listen to auth state changes

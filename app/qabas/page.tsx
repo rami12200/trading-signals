@@ -80,7 +80,7 @@ export default function QabasPage() {
   }
 
   return (
-    <ProtectedPage requiredPlan="pro" featureName="مؤشر القبس المتقدم">
+    <ProtectedPage requiredPlan="pro" pageName="qabas" featureName="مؤشر القبس المتقدم">
     <main className="max-w-7xl mx-auto px-4 py-8">
       {/* Header */}
       <div className="mb-6">
