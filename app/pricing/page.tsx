@@ -15,7 +15,7 @@ const plans: PricingPlan[] = [
       'حالة الأسواق',
     ],
     notIncluded: [
-      'المؤشر المتقدم KFOO',
+      'مؤشر القبس المتقدم',
       'Smart Money (BoS)',
       'تنبيهات فورية',
       'دعم أولوية',
@@ -33,7 +33,7 @@ const plans: PricingPlan[] = [
       'كل إشارات 6 عملات',
       'تحديث كل 15 ثانية',
       'كل المؤشرات الفنية',
-      'المؤشر المتقدم KFOO',
+      'مؤشر القبس المتقدم',
       'Smart Money (BoS)',
       'حاسبة الصفقات',
     ],
@@ -157,7 +157,7 @@ export default function PricingPage() {
       <div className="mt-16 text-center">
         <p className="text-neutral-400 text-sm">
           لديك سؤال؟ تواصل معنا على{' '}
-          <span className="text-accent">support@tradesignals.pro</span>
+          <span className="text-accent">support@qabas.pro</span>
         </p>
       </div>
     </main>

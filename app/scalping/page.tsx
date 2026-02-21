@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { KFOOSignal } from '@/lib/types'
 import { formatPrice } from '@/lib/binance'
+import { ProtectedPage } from '@/components/ProtectedPage'
 
 const timeframes = [
   { value: '1m', label: '1 دقيقة' },
@@ -17,7 +18,7 @@ export default function ScalpingPage() {
 
   const fetchSignals = useCallback(async () => {
     try {
-      const res = await fetch(`/api/kfoo?interval=${timeframe}`)
+      const res = await fetch(`/api/qabas?interval=${timeframe}`)
       const json = await res.json()
       if (json.success) setSignals(json.data.signals)
     } catch (e) {
@@ -38,6 +39,7 @@ export default function ScalpingPage() {
   const sellCount = signals.filter((s) => s.signal === 'SELL').length
 
   return (
+    <ProtectedPage requiredPlan="pro" featureName="المضاربة اللحظية">
     <main className="max-w-7xl mx-auto px-4 py-8">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
         <div>
@@ -146,5 +148,6 @@ export default function ScalpingPage() {
         </div>
       )}
     </main>
+    </ProtectedPage>
   )
 }

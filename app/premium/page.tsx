@@ -1,7 +1,11 @@
+'use client'
+
 import Link from 'next/link'
+import { ProtectedPage } from '@/components/ProtectedPage'
 
 export default function PremiumPage() {
   return (
+    <ProtectedPage requiredPlan="vip" featureName="باقة بريميوم + ربط MT5">
     <div className="max-w-4xl mx-auto px-4 py-12">
       {/* Header */}
       <div className="text-center mb-12">
@@ -193,6 +197,7 @@ export default function PremiumPage() {
         </div>
       </div>
     </div>
+    </ProtectedPage>
   )
 }
 

@@ -3,40 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-
-const USERS_KEY = 'tradesignals_users'
-const SESSION_KEY = 'tradesignals_session'
-
-interface User {
-  id: string
-  name: string
-  email: string
-  password: string
-  createdAt: string
-  plan: 'free' | 'pro' | 'enterprise'
-}
-
-function getUsers(): User[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = localStorage.getItem(USERS_KEY)
-    return raw ? JSON.parse(raw) : []
-  } catch { return [] }
-}
-
-function saveUsers(users: User[]) {
-  localStorage.setItem(USERS_KEY, JSON.stringify(users))
-}
-
-function setSession(user: User) {
-  localStorage.setItem(SESSION_KEY, JSON.stringify({
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    plan: user.plan,
-    createdAt: user.createdAt,
-  }))
-}
+import { signUp } from '@/lib/auth'
 
 export default function RegisterPage() {
   const router = useRouter()
@@ -45,11 +12,13 @@ export default function RegisterPage() {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
   const [loading, setLoading] = useState(false)
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+    setSuccess('')
 
     if (!name.trim()) return setError('الرجاء إدخال الاسم')
     if (!email.trim()) return setError('الرجاء إدخال البريد الإلكتروني')
@@ -59,34 +28,27 @@ export default function RegisterPage() {
 
     setLoading(true)
 
-    const users = getUsers()
-    if (users.find((u) => u.email === email.toLowerCase())) {
+    try {
+      await signUp(email.toLowerCase().trim(), password, name.trim())
+      setSuccess('تم إنشاء الحساب بنجاح! جاري التحويل...')
+      setTimeout(() => router.push('/profile'), 1000)
+    } catch (err: any) {
+      const msg = err.message || 'حدث خطأ'
+      if (msg.includes('already registered')) {
+        setError('البريد الإلكتروني مسجل مسبقاً')
+      } else {
+        setError(msg)
+      }
+    } finally {
       setLoading(false)
-      return setError('البريد الإلكتروني مسجل مسبقاً')
     }
-
-    const newUser: User = {
-      id: `user-${Date.now()}`,
-      name: name.trim(),
-      email: email.toLowerCase().trim(),
-      password,
-      createdAt: new Date().toISOString(),
-      plan: 'free',
-    }
-
-    saveUsers([...users, newUser])
-    setSession(newUser)
-
-    setTimeout(() => {
-      router.push('/profile')
-    }, 500)
   }
 
   return (
     <main className="max-w-md mx-auto px-4 py-16">
       <div className="text-center mb-8">
         <h1 className="text-3xl font-bold mb-2">إنشاء حساب جديد</h1>
-        <p className="text-neutral-500 text-sm">انضم لأكثر من 2,500 متداول يستخدمون TradeSignals Pro</p>
+        <p className="text-neutral-500 text-sm">انضم لأكثر من 2,500 متداول يستخدمون مؤشر القبس</p>
       </div>
 
       <div className="card">
@@ -141,6 +103,12 @@ export default function RegisterPage() {
           {error && (
             <div className="text-sm text-bearish bg-bearish/10 border border-bearish/20 rounded-xl px-4 py-3">
               {error}
+            </div>
+          )}
+
+          {success && (
+            <div className="text-sm text-bullish bg-bullish/10 border border-bullish/20 rounded-xl px-4 py-3">
+              {success}
             </div>
           )}
 

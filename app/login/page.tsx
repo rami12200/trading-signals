@@ -3,36 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-
-const USERS_KEY = 'tradesignals_users'
-const SESSION_KEY = 'tradesignals_session'
-
-interface User {
-  id: string
-  name: string
-  email: string
-  password: string
-  plan: 'free' | 'pro' | 'enterprise'
-  createdAt: string
-}
-
-function getUsers(): User[] {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = localStorage.getItem(USERS_KEY)
-    return raw ? JSON.parse(raw) : []
-  } catch { return [] }
-}
-
-function setSession(user: User) {
-  localStorage.setItem(SESSION_KEY, JSON.stringify({
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    plan: user.plan,
-    createdAt: user.createdAt,
-  }))
-}
+import { signIn } from '@/lib/auth'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -41,7 +12,7 @@ export default function LoginPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
 
@@ -50,19 +21,16 @@ export default function LoginPage() {
 
     setLoading(true)
 
-    const users = getUsers()
-    const user = users.find((u) => u.email === email.toLowerCase().trim() && u.password === password)
-
-    if (!user) {
-      setLoading(false)
-      return setError('البريد الإلكتروني أو كلمة السر غير صحيحة')
-    }
-
-    setSession(user)
-
-    setTimeout(() => {
+    try {
+      await signIn(email.toLowerCase().trim(), password)
       router.push('/profile')
-    }, 500)
+    } catch (err: any) {
+      setError(err.message === 'Invalid login credentials'
+        ? 'البريد الإلكتروني أو كلمة السر غير صحيحة'
+        : err.message || 'حدث خطأ')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (

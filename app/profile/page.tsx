@@ -3,18 +3,10 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { useAuth } from '@/components/AuthProvider'
 
-const SESSION_KEY = 'tradesignals_session'
 const TRADES_KEY = 'quickscalp_my_trades'
 const HISTORY_KEY = 'quickscalp_trade_history'
-
-interface Session {
-  id: string
-  name: string
-  email: string
-  plan: 'free' | 'pro' | 'enterprise'
-  createdAt: string
-}
 
 interface ClosedTrade {
   id: string
@@ -23,14 +15,6 @@ interface ClosedTrade {
   pnlPct: number
   result: 'WIN' | 'LOSS'
   closedAt: string
-}
-
-function getSession(): Session | null {
-  if (typeof window === 'undefined') return null
-  try {
-    const raw = localStorage.getItem(SESSION_KEY)
-    return raw ? JSON.parse(raw) : null
-  } catch { return null }
 }
 
 function getTradeHistory(): ClosedTrade[] {
@@ -51,29 +35,25 @@ function getActiveTradesCount(): number {
 
 export default function ProfilePage() {
   const router = useRouter()
-  const [session, setSession] = useState<Session | null>(null)
+  const { user, loading: authLoading, signOut } = useAuth()
   const [history, setHistory] = useState<ClosedTrade[]>([])
   const [activeTrades, setActiveTrades] = useState(0)
-  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const s = getSession()
-    if (!s) {
+    if (!authLoading && !user) {
       router.push('/login')
       return
     }
-    setSession(s)
     setHistory(getTradeHistory())
     setActiveTrades(getActiveTradesCount())
-    setLoading(false)
-  }, [router])
+  }, [user, authLoading, router])
 
-  const logout = () => {
-    localStorage.removeItem(SESSION_KEY)
+  const logout = async () => {
+    await signOut()
     router.push('/')
   }
 
-  if (loading || !session) {
+  if (authLoading || !user) {
     return (
       <main className="max-w-4xl mx-auto px-4 py-16">
         <div className="card animate-pulse h-64" />
@@ -85,15 +65,15 @@ export default function ProfilePage() {
   const losses = history.filter((t) => t.result === 'LOSS').length
   const winRate = history.length > 0 ? (wins / history.length) * 100 : 0
   const totalPnl = history.reduce((sum, t) => sum + t.pnlPct, 0)
-  const memberSince = new Date(session.createdAt).toLocaleDateString('ar-EG', {
+  const memberSince = new Date(user.created_at).toLocaleDateString('ar-EG', {
     year: 'numeric', month: 'long', day: 'numeric'
   })
 
-  const planNames: Record<string, string> = { free: 'مجاني', pro: 'Pro', enterprise: 'Enterprise' }
+  const planNames: Record<string, string> = { free: 'مجاني', pro: 'برو', vip: 'VIP' }
   const planColors: Record<string, string> = {
     free: 'bg-neutral-500/20 text-neutral-400',
     pro: 'bg-accent/20 text-accent',
-    enterprise: 'bg-purple-500/20 text-purple-400',
+    vip: 'bg-purple-500/20 text-purple-400',
   }
 
   return (
@@ -103,14 +83,14 @@ export default function ProfilePage() {
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 rounded-2xl bg-accent/10 border border-accent/20 flex items-center justify-center text-2xl font-bold text-accent">
-              {session.name.charAt(0)}
+              {user.name.charAt(0) || '?'}
             </div>
             <div>
-              <h1 className="text-2xl font-bold">{session.name}</h1>
-              <p className="text-sm text-neutral-500" dir="ltr">{session.email}</p>
+              <h1 className="text-2xl font-bold">{user.name || 'مستخدم'}</h1>
+              <p className="text-sm text-neutral-500" dir="ltr">{user.email}</p>
               <div className="flex items-center gap-2 mt-1">
-                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${planColors[session.plan]}`}>
-                  {planNames[session.plan]}
+                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${planColors[user.plan] || planColors.free}`}>
+                  {planNames[user.plan] || 'مجاني'}
                 </span>
                 <span className="text-[10px] text-neutral-600">عضو منذ {memberSince}</span>
               </div>
@@ -161,9 +141,9 @@ export default function ProfilePage() {
           <h3 className="font-bold mb-1 group-hover:text-accent transition-all">جدول الإشارات</h3>
           <p className="text-xs text-neutral-500">جميع الإشارات في مكان واحد</p>
         </Link>
-        <Link href="/kfoo" className="card hover:border-accent/30 transition-all group">
-          <div className="text-2xl mb-2">🎯</div>
-          <h3 className="font-bold mb-1 group-hover:text-accent transition-all">المؤشر المتقدم</h3>
+        <Link href="/qabas" className="card hover:border-accent/30 transition-all group">
+          <div className="text-2xl mb-2">🔥</div>
+          <h3 className="font-bold mb-1 group-hover:text-accent transition-all">مؤشر القبس</h3>
           <p className="text-xs text-neutral-500">تحليل فني شامل</p>
         </Link>
       </div>
@@ -213,7 +193,7 @@ export default function ProfilePage() {
       )}
 
       {/* Plan Upgrade */}
-      {session.plan === 'free' && (
+      {user.plan === 'free' && (
         <div className="card border-accent/20 bg-gradient-to-r from-accent/[0.03] to-purple-500/[0.03]">
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <div>
@@ -224,7 +204,7 @@ export default function ProfilePage() {
               href="/#pricing"
               className="px-6 py-3 bg-accent hover:bg-accent/80 text-white font-bold rounded-xl transition-all shadow-lg shadow-accent/20 text-sm whitespace-nowrap"
             >
-              ترقية الآن — $49/شهر
+              ترقية الآن
             </Link>
           </div>
         </div>

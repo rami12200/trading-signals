@@ -2,6 +2,8 @@ import './globals.css'
 import type { Metadata } from 'next'
 import { Cairo } from 'next/font/google'
 import Link from 'next/link'
+import { AuthProvider } from '@/components/AuthProvider'
+import { AuthButtons } from '@/components/AuthButtons'
 
 const cairo = Cairo({ subsets: ['arabic', 'latin'], weight: ['400', '500', '600', '700'] })
 
@@ -18,7 +20,8 @@ export default function RootLayout({
   return (
     <html lang="ar" dir="rtl">
       <body className={cairo.className}>
-        <div className="min-h-screen bg-background text-white">
+        <AuthProvider>
+          <div className="min-h-screen bg-background text-white">
           {/* Header */}
           <header className="sticky top-0 z-50 border-b border-white/[0.06] bg-background/80 backdrop-blur-xl">
             <div className="max-w-7xl mx-auto px-4 h-16 flex justify-between items-center">
@@ -31,7 +34,7 @@ export default function RootLayout({
 
               {/* Desktop Nav */}
               <nav className="hidden md:flex items-center gap-1">
-                <NavLink href="/kfoo">المؤشر المتقدم</NavLink>
+                <NavLink href="/qabas">مؤشر القبس</NavLink>
                 <NavLink href="/signals">الإشارات</NavLink>
                 <NavLink href="/quickscalp">سكالبينج سريع</NavLink>
                 <NavLink href="/scalping">المضاربة</NavLink>
@@ -42,19 +45,7 @@ export default function RootLayout({
               </nav>
 
               <div className="flex items-center gap-2">
-                <Link
-                  href="/login"
-                  className="hidden md:inline-block px-3 py-2 rounded-lg text-sm text-neutral-300 hover:text-white hover:bg-white/[0.05] transition-all"
-                >
-                  دخول
-                </Link>
-                <Link
-                  href="/register"
-                  className="btn-primary text-sm !px-4 !py-2"
-                >
-                  إنشاء حساب
-                </Link>
-
+                <AuthButtons />
                 {/* Mobile Menu Button */}
                 <MobileMenu />
               </div>
@@ -86,14 +77,18 @@ export default function RootLayout({
                 <div>
                   <h4 className="font-semibold mb-3 text-sm">الأدوات</h4>
                   <div className="flex flex-col gap-2 text-sm text-neutral-400">
-                    <Link href="/kfoo" className="hover:text-white transition-colors">المؤشر المتقدم</Link>
+                    <Link href="/qabas" className="hover:text-white transition-colors">مؤشر القبس</Link>
                     <Link href="/signals" className="hover:text-white transition-colors">جدول الإشارات</Link>
                     <Link href="/markets" className="hover:text-white transition-colors">حالة الأسواق</Link>
                   </div>
                 </div>
                 <div>
-                  <h4 className="font-semibold mb-3 text-sm">تواصل معنا</h4>
-                  <p className="text-sm text-neutral-400">support@tradesignals.pro</p>
+                  <h4 className="font-semibold mb-3 text-sm">قانوني</h4>
+                  <div className="flex flex-col gap-2 text-sm text-neutral-400">
+                    <Link href="/privacy" className="hover:text-white transition-colors">سياسة الخصوصية</Link>
+                    <Link href="/terms" className="hover:text-white transition-colors">شروط الاستخدام</Link>
+                    <p className="mt-2">support@qabas.pro</p>
+                  </div>
                 </div>
               </div>
               <div className="border-t border-white/[0.06] mt-8 pt-8 text-center text-xs text-neutral-500">
@@ -102,6 +97,7 @@ export default function RootLayout({
             </div>
           </footer>
         </div>
+        </AuthProvider>
       </body>
     </html>
   )
@@ -130,7 +126,7 @@ function MobileMenu() {
           </svg>
         </summary>
         <div className="absolute left-0 top-full mt-2 w-56 bg-surface border border-white/[0.06] rounded-xl shadow-2xl p-2 z-50">
-          <MobileNavLink href="/kfoo">المؤشر المتقدم</MobileNavLink>
+          <MobileNavLink href="/qabas">مؤشر القبس</MobileNavLink>
           <MobileNavLink href="/signals">الإشارات</MobileNavLink>
           <MobileNavLink href="/quickscalp">سكالبينج سريع</MobileNavLink>
           <MobileNavLink href="/scalping">المضاربة</MobileNavLink>

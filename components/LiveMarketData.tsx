@@ -110,7 +110,7 @@ export function LiveSignals() {
 
   const fetchSignals = useCallback(async () => {
     try {
-      const response = await fetch('/api/kfoo?interval=15m')
+      const response = await fetch('/api/qabas?interval=15m')
       const result = await response.json()
 
       if (result.success && result.data.signals) {

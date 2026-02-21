@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { KFOOSignal } from '@/lib/types'
 import { formatPrice } from '@/lib/binance'
+import { ProtectedPage } from '@/components/ProtectedPage'
 
 export default function DailyPage() {
   const [signals, setSignals] = useState<KFOOSignal[]>([])
@@ -10,7 +11,7 @@ export default function DailyPage() {
 
   const fetchSignals = useCallback(async () => {
     try {
-      const res = await fetch('/api/kfoo?interval=1h')
+      const res = await fetch('/api/qabas?interval=1h')
       const json = await res.json()
       if (json.success) setSignals(json.data.signals)
     } catch (e) {
@@ -30,6 +31,7 @@ export default function DailyPage() {
   const neutralCount = signals.filter((s) => s.signal === 'NEUTRAL').length
 
   return (
+    <ProtectedPage requiredPlan="pro" featureName="التوصيات اليومية">
     <main className="max-w-7xl mx-auto px-4 py-8">
       <h1 className="text-2xl font-bold mb-1">التوصيات اليومية</h1>
       <p className="text-sm text-neutral-500 mb-6">تحليل على إطار الساعة — تحديث كل دقيقة</p>
@@ -129,5 +131,6 @@ export default function DailyPage() {
         </div>
       )}
     </main>
+    </ProtectedPage>
   )
 }
