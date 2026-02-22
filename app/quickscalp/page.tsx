@@ -263,43 +263,8 @@ export default function QuickScalpPage() {
     return myTrades.some((t) => t.symbol === symbol)
   }
 
-  const openTrade = async (sig: QuickScalpSignal) => {
-    if (executingTrade) return
-    setExecutingTrade(sig.symbol)
-
-    // 1. Send to EA API (Supabase)
-    try {
-      const res = await fetch('/api/signals/execute', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          symbol: sig.symbol,
-          action: sig.action === 'BUY' ? 'BUY' : 'SELL',
-          entry: sig.entry,
-          stopLoss: sig.stopLoss,
-          takeProfit: sig.target,
-          api_key: user?.api_key
-        })
-      })
-      const data = await res.json()
-      if (!data.success) {
-        console.error('EA Execution Failed:', data.error)
-        alert('فشل إرسال الأمر للـ EA: ' + data.error)
-        setExecutingTrade(null)
-        return
-      }
-      
-      // Success!
-      alert('تم إرسال الأمر للـ EA بنجاح! 🚀')
-      
-    } catch (e) {
-      console.error('Network Error:', e)
-      alert('خطأ في الاتصال بالخادم')
-      setExecutingTrade(null)
-      return
-    }
-
-    // 2. Save locally for UI tracking
+  // Save trade locally (no API call)
+  const saveTradLocally = (sig: QuickScalpSignal) => {
     const livePrice = getLivePrice(sig.symbol, sig.price)
     const trade: MyTrade = {
       id: `trade-${sig.symbol}-${Date.now()}`,
@@ -316,10 +281,11 @@ export default function QuickScalpPage() {
     const updated = [trade, ...myTrades]
     setMyTrades(updated)
     saveTrades(updated)
-    
-    // Mark as executed in UI
-    setExecutedTrades(prev => ({ ...prev, [sig.id]: true }))
-    setExecutingTrade(null)
+  }
+
+  // openTrade is now only for local save (button "احفظ البيانات")
+  const openTrade = (sig: QuickScalpSignal) => {
+    saveTradLocally(sig)
   }
 
   const closeTrade = (tradeId: string) => {
@@ -1016,6 +982,7 @@ export default function QuickScalpPage() {
                               if (data.success) {
                                 setExecutedTrades((prev) => ({ ...prev, [sig.symbol]: true }))
                                 setTimeout(() => setExecutedTrades((prev) => ({ ...prev, [sig.symbol]: false })), 10000)
+                                saveTradLocally(sig)
                               } else {
                                 alert('فشل إرسال الأمر: ' + (data.error || 'خطأ غير معروف'))
                               }
