@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { formatPrice, SIGNAL_PAIRS } from '@/lib/binance'
 import { useBinanceWS } from '@/hooks/useBinanceWS'
 import { ProtectedPage } from '@/components/ProtectedPage'
+import { useAuth } from '@/components/AuthProvider'
 
 interface QuickScalpSignal {
   id: string
@@ -187,6 +188,7 @@ const timeframes = [
 ]
 
 export default function QuickScalpPage() {
+  const { user } = useAuth()
   const [signals, setSignals] = useState<QuickScalpSignal[]>([])
   const [timeframe, setTimeframe] = useState('15m')
   const [loading, setLoading] = useState(true)
@@ -271,11 +273,12 @@ export default function QuickScalpPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          symbol: sig.symbol, // BTCUSDT
+          symbol: sig.symbol,
           action: sig.action === 'BUY' ? 'BUY' : 'SELL',
           entry: sig.entry,
           stopLoss: sig.stopLoss,
-          takeProfit: sig.target
+          takeProfit: sig.target,
+          api_key: user?.api_key
         })
       })
       const data = await res.json()
@@ -997,7 +1000,7 @@ export default function QuickScalpPage() {
                             e.stopPropagation()
                             setExecutingTrade(sig.symbol)
                             try {
-                              const res = await fetch('/api/signals/execute', { // Use the correct endpoint for execution
+                              const res = await fetch('/api/signals/execute', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({
@@ -1006,6 +1009,7 @@ export default function QuickScalpPage() {
                                   entry: sig.entry,
                                   stopLoss: sig.stopLoss,
                                   takeProfit: sig.target,
+                                  api_key: user?.api_key,
                                 }),
                               })
                               const data = await res.json()
