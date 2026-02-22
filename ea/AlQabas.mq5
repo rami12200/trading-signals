@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "AlQabas Pro"
 #property link      "https://qabas.pro"
-#property version   "1.03" // Updated version
-#property description "Auto-trading EA - Receives signals from TradeSignals Pro API"
+#property version   "1.04"
+#property description "AlQabas EA - Auto-detect broker symbols & execute trades"
 #property strict
 
 //--- إعدادات الاتصال بالخادم
@@ -26,11 +26,14 @@ input int      TrailingStopPoints = 50;                // مسافة الوقف 
 
 //--- إعدادات الرموز
 input group "=== Symbol Settings ==="
-input string   SymbolSuffix = "";                      // لاحقة الرمز (مثلا .m أو .raw)
-input string   SymbolPrefix = "";                      // بادئة الرمز
+input string   SymbolSuffix = "";                      // لاحقة الرمز (اتركه فارغ للكشف التلقائي)
+input string   SymbolPrefix = "";                      // بادئة الرمز (اتركه فارغ للكشف التلقائي)
+input bool     AutoDetectSymbol = true;                 // كشف تلقائي لرمز البروكر
 
 //--- متغيرات عالمية
 string currentSymbol;
+string detectedSuffix = "";
+string detectedPrefix = "";
 datetime lastSignalCheck = 0;
 datetime lastOrderCheck = 0;
 
@@ -46,8 +49,21 @@ int OnInit()
    }
 
    currentSymbol = Symbol();
-   Print("TradeSignals Pro EA initialized for: ", currentSymbol);
+   Print("AlQabas EA initialized for: ", currentSymbol);
    Print("API Base URL: ", API_BASE_URL);
+   
+   // كشف تلقائي للاحقة والبادئة من الرمز الحالي
+   if(AutoDetectSymbol)
+   {
+      DetectBrokerFormat();
+   }
+   else
+   {
+      detectedSuffix = SymbolSuffix;
+      detectedPrefix = SymbolPrefix;
+   }
+   
+   Print("Detected Prefix: [", detectedPrefix, "] Suffix: [", detectedSuffix, "]");
    
    // السماح بـ WebRequest
    if(!TerminalInfoInteger(TERMINAL_DLLS_ALLOWED))
@@ -169,6 +185,112 @@ void CheckTrailingStop()
 }
 
 //+------------------------------------------------------------------+
+//| كشف تلقائي لتنسيق رموز البروكر                                   |
+//+------------------------------------------------------------------+
+void DetectBrokerFormat()
+{
+   // إذا المستخدم حدد يدوياً، نستخدم قيمه
+   if(SymbolSuffix != "" || SymbolPrefix != "")
+   {
+      detectedSuffix = SymbolSuffix;
+      detectedPrefix = SymbolPrefix;
+      Print("Using manual prefix/suffix: [", detectedPrefix, "] / [", detectedSuffix, "]");
+      return;
+   }
+   
+   // نحلل الرمز الحالي على الشارت لاكتشاف البادئة واللاحقة
+   // مثلاً: BTCUSDm → suffix = "m"
+   //        .BTCUSDraw → prefix = "." suffix = "raw"
+   //        BTCUSD → no suffix
+   
+   string sym = currentSymbol;
+   
+   // قائمة الرموز الأساسية المعروفة
+   string baseSymbols[] = {
+      "BTCUSD", "ETHUSD", "XRPUSD", "SOLUSD", "BNBUSD", "DOGEUSD", "ADAUSD",
+      "XAUUSD", "XAGUSD", "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD",
+      "USDCHF", "NZDUSD", "GBPJPY", "EURJPY", "EURGBP"
+   };
+   
+   for(int i = 0; i < ArraySize(baseSymbols); i++)
+   {
+      int pos = StringFind(sym, baseSymbols[i]);
+      if(pos >= 0)
+      {
+         detectedPrefix = StringSubstr(sym, 0, pos);
+         detectedSuffix = StringSubstr(sym, pos + StringLen(baseSymbols[i]));
+         Print("Auto-detected from ", sym, ": base=", baseSymbols[i], " prefix=[", detectedPrefix, "] suffix=[", detectedSuffix, "]");
+         return;
+      }
+   }
+   
+   Print("Could not auto-detect suffix from ", sym, ". Will try smart matching.");
+}
+
+//+------------------------------------------------------------------+
+//| البحث عن الرمز الصحيح عند البروكر                                 |
+//+------------------------------------------------------------------+
+string FindBrokerSymbol(string baseSymbol)
+{
+   // 1. إذا عندنا prefix/suffix مكتشفة، نجرب أولاً
+   if(detectedPrefix != "" || detectedSuffix != "")
+   {
+      string candidate = detectedPrefix + baseSymbol + detectedSuffix;
+      if(SymbolSelect(candidate, true)) return candidate;
+   }
+   
+   // 2. نجرب الرمز كما هو
+   if(SymbolSelect(baseSymbol, true)) return baseSymbol;
+   
+   // 3. نجرب لواحق شائعة لكل البروكرات
+   string suffixes[] = {
+      "m", ".m", "M", ".raw", "raw", ".a", ".i", ".e",
+      "_", ".std", ".pro", ".ecn", "c", ".c", "#",
+      ".sml", ".mini", "micro", "-m", "_m"
+   };
+   
+   for(int i = 0; i < ArraySize(suffixes); i++)
+   {
+      string candidate = baseSymbol + suffixes[i];
+      if(SymbolSelect(candidate, true))
+      {
+         // نحفظ اللاحقة المكتشفة للاستخدام لاحقاً
+         if(detectedSuffix == "") detectedSuffix = suffixes[i];
+         Print("Found broker symbol: ", candidate, " (suffix: ", suffixes[i], ")");
+         return candidate;
+      }
+   }
+   
+   // 4. نجرب بوادئ شائعة
+   string prefixes[] = {".", "#", "_"};
+   for(int p = 0; p < ArraySize(prefixes); p++)
+   {
+      string candidate = prefixes[p] + baseSymbol;
+      if(SymbolSelect(candidate, true))
+      {
+         if(detectedPrefix == "") detectedPrefix = prefixes[p];
+         Print("Found broker symbol: ", candidate, " (prefix: ", prefixes[p], ")");
+         return candidate;
+      }
+      // بادئة + لاحقة
+      for(int s = 0; s < ArraySize(suffixes); s++)
+      {
+         candidate = prefixes[p] + baseSymbol + suffixes[s];
+         if(SymbolSelect(candidate, true))
+         {
+            if(detectedPrefix == "") detectedPrefix = prefixes[p];
+            if(detectedSuffix == "") detectedSuffix = suffixes[s];
+            Print("Found broker symbol: ", candidate);
+            return candidate;
+         }
+      }
+   }
+   
+   Print("Warning: Could not find broker symbol for ", baseSymbol);
+   return "";
+}
+
+//+------------------------------------------------------------------+
 //| Helper: Simple JSON Value Extractor                              |
 //+------------------------------------------------------------------+
 string GetJsonValue(string json, string key)
@@ -211,8 +333,7 @@ string GetJsonValue(string json, string key)
 //+------------------------------------------------------------------+
 void CheckOrderQueue()
 {
-   // نستخدم EA_API_KEY للتحقق من الأوامر التي يجب تنفيذها
-   string url = API_BASE_URL + "/api/signals/execute?key=" + USER_API_KEY; // Use User Key to get their orders
+   string url = API_BASE_URL + "/api/signals/execute?key=" + USER_API_KEY;
    
    char data[];
    char result[];
@@ -226,6 +347,7 @@ void CheckOrderQueue()
       
       // التأكد من وجود أوامر
       if(StringFind(response, "\"orders\":[") == -1) return;
+      if(StringFind(response, "\"orders\":[]") >= 0) return;
       
       // استخراج بيانات أول أمر في القائمة
       string orderId = GetJsonValue(response, "id");
@@ -234,44 +356,37 @@ void CheckOrderQueue()
       double sl = StringToDouble(GetJsonValue(response, "stopLoss"));
       double tp = StringToDouble(GetJsonValue(response, "takeProfit"));
       
-      // التحقق من أن الأمر لنفس الزوج الحالي (اختياري، يمكن إزالته لتنفيذ كل الأزواج)
-      // هنا سننفذ فقط إذا كان الرمز مطابقاً أو إذا كنا نريد تشغيل EA واحد لكل الأزواج
-      // للتبسيط: سننفذ إذا كان الرمز مطابقاً للرمز الحالي (BTCUSD مثلاً)
+      if(orderId == "" || action == "") return;
       
-      // تحويل رمز المنصة للتأكد
-      string cleanCurrent = currentSymbol;
-      if(SymbolSuffix != "") StringReplace(cleanCurrent, SymbolSuffix, "");
+      Print("Found pending order: ", orderId, " Action: ", action, " Symbol: ", symbol);
       
-      // إذا وجدنا ID و Action صالحين
-      if(orderId != "" && action != "")
+      // تحويل الرمز من Binance (BTCUSDT) إلى MT5 (BTCUSD)
+      string baseSymbol = symbol;
+      if(StringFind(baseSymbol, "USDT") > 0) StringReplace(baseSymbol, "USDT", "USD");
+      
+      // البحث التلقائي عن الرمز الصحيح عند البروكر
+      string tradeSymbol = FindBrokerSymbol(baseSymbol);
+      if(tradeSymbol == "")
       {
-         Print("Found pending order: ", orderId, " Action: ", action, " Symbol: ", symbol);
-         
-         // استخدام الرمز القادم من السيرفر (مع مراعاة اللاحقة والبادئة)
-         string tradeSymbol = symbol;
-         // إذا كان الرمز القادم من السيرفر بتنسيق Binance (مثلاً ETHUSDT) ونحن نريد MT5 (ETHUSD)
-         // السيرفر يرسل mt5Symbol عادة، لكن هنا نعتمد على symbol
-         if(StringFind(tradeSymbol, "USDT") > 0) StringReplace(tradeSymbol, "USDT", "USD");
-         
-         // إضافة بادئة ولاحقة البروكر إذا وجدت
-         tradeSymbol = SymbolPrefix + tradeSymbol + SymbolSuffix;
-         
-         bool executed = false;
-         
-         if(action == "BUY")
-         {
-            executed = ExecuteTrade(tradeSymbol, ORDER_TYPE_BUY, sl, tp);
-         }
-         else if(action == "SELL")
-         {
-            executed = ExecuteTrade(tradeSymbol, ORDER_TYPE_SELL, sl, tp);
-         }
-         
-         // إذا تم التنفيذ بنجاح (أو حتى فشل ولكن حاولنا)، نبلغ السيرفر لإيقاف التكرار
-         if(executed)
-         {
-            MarkOrderExecuted(orderId);
-         }
+         Print("Error: Cannot find symbol ", baseSymbol, " at this broker. Skipping order ", orderId);
+         MarkOrderExecuted(orderId);
+         return;
+      }
+      
+      bool executed = false;
+      
+      if(action == "BUY")
+      {
+         executed = ExecuteTrade(tradeSymbol, ORDER_TYPE_BUY, sl, tp);
+      }
+      else if(action == "SELL")
+      {
+         executed = ExecuteTrade(tradeSymbol, ORDER_TYPE_SELL, sl, tp);
+      }
+      
+      if(executed)
+      {
+         MarkOrderExecuted(orderId);
       }
    }
 }
