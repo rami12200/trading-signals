@@ -22,7 +22,9 @@ input int      MaxTrades    = 5;                       // أقصى عدد صفق
 input int      Slippage     = 30;                      // الانزلاق السعري (نقاط)
 input int      MagicNumber  = 202601;                  // الرقم السحري للصفقات
 input bool     UseTrailing  = true;                    // تفعيل الوقف المتحرك
-input int      TrailingStopPoints = 50;                // مسافة الوقف المتحرك (نقاط)
+input double   TrailingActivateProfit = 2.0;           // ابدأ الوقف المتحرك بعد ربح ($)
+input double   TrailingDistPercent = 0.03;             // مسافة الوقف المتحرك (% من السعر)
+input int      TrailingStopPoints = 0;                 // مسافة ثابتة (نقاط) - 0 = تلقائي
 
 //--- إعدادات الرموز
 input group "=== Symbol Settings ==="
@@ -102,84 +104,102 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
-//| وظيفة الوقف المتحرك (Trailing Stop)                              |
+//| وظيفة الوقف المتحرك (Trailing Stop) — يعمل على الصفقات المفتوحة |
 //+------------------------------------------------------------------+
 void CheckTrailingStop()
 {
-   for(int i=OrdersTotal()-1; i>=0; i--)
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
-      ulong ticket = OrderGetTicket(i);
-      if(OrderSelect(ticket))
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      
+      string symbol   = PositionGetString(POSITION_SYMBOL);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double sl        = PositionGetDouble(POSITION_SL);
+      double tp        = PositionGetDouble(POSITION_TP);
+      double volume    = PositionGetDouble(POSITION_VOLUME);
+      long   posType   = PositionGetInteger(POSITION_TYPE);
+      
+      double point  = SymbolInfoDouble(symbol, SYMBOL_POINT);
+      int    digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+      
+      if(point == 0) continue;
+      
+      // السعر الحالي حسب نوع الصفقة
+      double price = (posType == POSITION_TYPE_BUY) 
+                     ? SymbolInfoDouble(symbol, SYMBOL_BID) 
+                     : SymbolInfoDouble(symbol, SYMBOL_ASK);
+      
+      // حساب الربح الحالي بالدولار
+      double profit = PositionGetDouble(POSITION_PROFIT);
+      
+      // لا نبدأ الوقف المتحرك إلا بعد تحقيق الحد الأدنى من الربح
+      if(profit < TrailingActivateProfit) continue;
+      
+      // حساب مسافة الوقف المتحرك
+      double trailDist;
+      if(TrailingStopPoints > 0)
       {
-         // Check Magic Number only, to handle all symbols traded by this EA
-         if(OrderGetInteger(ORDER_MAGIC) == MagicNumber)
-         {
-            string symbol = OrderGetString(ORDER_SYMBOL);
-            double sl = OrderGetDouble(ORDER_SL);
-            double tp = OrderGetDouble(ORDER_TP);
-            
-            // Use symbol-specific pricing
-            double price = (OrderGetInteger(ORDER_TYPE) == ORDER_TYPE_BUY) ? SymbolInfoDouble(symbol, SYMBOL_BID) : SymbolInfoDouble(symbol, SYMBOL_ASK);
-            double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-            
-            // Safety check for point
-            if(point == 0) continue;
-            
-            double trailDist = TrailingStopPoints * point; 
-            
-            if(OrderGetInteger(ORDER_TYPE) == ORDER_TYPE_BUY)
-            {
-               if(price - sl > trailDist)
-               {
-                  double newSL = price - trailDist;
-                  // Normalize double to avoid invalid stops
-                  newSL = NormalizeDouble(newSL, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS));
-                  
-                  if(newSL > sl)
-                  {
-                     MqlTradeRequest request;
-                     MqlTradeResult result;
-                     ZeroMemory(request);
-                     ZeroMemory(result);
-                     
-                     request.action = TRADE_ACTION_SLTP;
-                     request.order = ticket;
-                     request.symbol = symbol;
-                     request.sl = newSL;
-                     request.tp = tp;
-                     
-                     if(!OrderSend(request, result))
-                        Print("Failed to modify Buy Order ", ticket, " Error: ", GetLastError());
-                  }
-               }
-            }
-            else if(OrderGetInteger(ORDER_TYPE) == ORDER_TYPE_SELL)
-            {
-               if(sl - price > trailDist || sl == 0)
-               {
-                  double newSL = price + trailDist;
-                  // Normalize double
-                  newSL = NormalizeDouble(newSL, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS));
-                  
-                  if(newSL < sl || sl == 0)
-                  {
-                     MqlTradeRequest request;
-                     MqlTradeResult result;
-                     ZeroMemory(request);
-                     ZeroMemory(result);
-                     
-                     request.action = TRADE_ACTION_SLTP;
-                     request.order = ticket;
-                     request.symbol = symbol;
-                     request.sl = newSL;
-                     request.tp = tp;
-                     
-                     if(!OrderSend(request, result))
-                        Print("Failed to modify Sell Order ", ticket, " Error: ", GetLastError());
-                  }
-               }
-            }
-         }
+         // المستخدم حدد مسافة ثابتة بالنقاط
+         trailDist = TrailingStopPoints * point;
+      }
+      else
+      {
+         // مسافة نسبية تلقائية حسب سعر الزوج
+         // TrailingDistPercent = 0.03 يعني 0.03%
+         // BTCUSD ($97000): 0.03% = $29.1 → مسافة معقولة
+         // EURUSD ($1.08):  0.03% = $0.000324 → ~3.2 pips → معقولة
+         // XAUUSD ($2650):  0.03% = $0.795 → معقولة
+         trailDist = price * TrailingDistPercent / 100.0;
+      }
+      
+      // تقريب المسافة لأقرب نقطة
+      trailDist = MathMax(trailDist, point * 5); // حد أدنى 5 نقاط
+      
+      double newSL = 0;
+      
+      if(posType == POSITION_TYPE_BUY)
+      {
+         newSL = NormalizeDouble(price - trailDist, digits);
+         
+         // الوقف الجديد لازم يكون أعلى من الحالي وأعلى من سعر الدخول
+         if(newSL <= sl && sl != 0) continue;
+         if(newSL <= openPrice) continue;
+      }
+      else if(posType == POSITION_TYPE_SELL)
+      {
+         newSL = NormalizeDouble(price + trailDist, digits);
+         
+         // الوقف الجديد لازم يكون أقل من الحالي وأقل من سعر الدخول
+         if(newSL >= sl && sl != 0) continue;
+         if(newSL >= openPrice) continue;
+      }
+      else continue;
+      
+      // تعديل الوقف
+      MqlTradeRequest request;
+      MqlTradeResult result;
+      ZeroMemory(request);
+      ZeroMemory(result);
+      
+      request.action   = TRADE_ACTION_SLTP;
+      request.position = ticket;
+      request.symbol   = symbol;
+      request.sl       = newSL;
+      request.tp       = tp;
+      
+      if(OrderSend(request, result))
+      {
+         Print("Trailing SL updated: ", symbol, " ticket=", ticket, 
+               " profit=$", DoubleToString(profit, 2),
+               " newSL=", DoubleToString(newSL, digits),
+               " dist=", DoubleToString(trailDist, digits));
+      }
+      else
+      {
+         Print("Failed to trail ", symbol, " ticket=", ticket, " Error: ", GetLastError());
       }
    }
 }
