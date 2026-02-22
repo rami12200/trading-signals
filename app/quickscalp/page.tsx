@@ -1016,8 +1016,6 @@ export default function QuickScalpPage() {
                               if (data.success) {
                                 setExecutedTrades((prev) => ({ ...prev, [sig.symbol]: true }))
                                 setTimeout(() => setExecutedTrades((prev) => ({ ...prev, [sig.symbol]: false })), 10000)
-                                // Also save trade to local trades list
-                                openTrade(sig)
                               } else {
                                 alert('فشل إرسال الأمر: ' + (data.error || 'خطأ غير معروف'))
                               }
