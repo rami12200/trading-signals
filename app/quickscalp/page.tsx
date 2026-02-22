@@ -216,7 +216,42 @@ export default function QuickScalpPage() {
     return myTrades.some((t) => t.symbol === symbol)
   }
 
-  const openTrade = (sig: QuickScalpSignal) => {
+  const openTrade = async (sig: QuickScalpSignal) => {
+    if (executingTrade) return
+    setExecutingTrade(sig.symbol)
+
+    // 1. Send to EA API (Supabase)
+    try {
+      const res = await fetch('/api/signals/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: sig.symbol, // BTCUSDT
+          action: sig.action === 'BUY' ? 'BUY' : 'SELL',
+          entry: sig.entry,
+          stopLoss: sig.stopLoss,
+          takeProfit: sig.target
+        })
+      })
+      const data = await res.json()
+      if (!data.success) {
+        console.error('EA Execution Failed:', data.error)
+        alert('فشل إرسال الأمر للـ EA: ' + data.error)
+        setExecutingTrade(null)
+        return
+      }
+      
+      // Success!
+      alert('تم إرسال الأمر للـ EA بنجاح! 🚀')
+      
+    } catch (e) {
+      console.error('Network Error:', e)
+      alert('خطأ في الاتصال بالخادم')
+      setExecutingTrade(null)
+      return
+    }
+
+    // 2. Save locally for UI tracking
     const livePrice = getLivePrice(sig.symbol, sig.price)
     const trade: MyTrade = {
       id: `trade-${sig.symbol}-${Date.now()}`,
@@ -233,6 +268,10 @@ export default function QuickScalpPage() {
     const updated = [trade, ...myTrades]
     setMyTrades(updated)
     saveTrades(updated)
+    
+    // Mark as executed in UI
+    setExecutedTrades(prev => ({ ...prev, [sig.id]: true }))
+    setExecutingTrade(null)
   }
 
   const closeTrade = (tradeId: string) => {
