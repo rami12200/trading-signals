@@ -618,9 +618,21 @@ function UsersTab({
                 </td>
                 <td className="p-3">
                   {u.api_key ? (
-                    <span className="text-xs font-mono text-amber-400 bg-amber-500/10 px-2 py-1 rounded" dir="ltr">
-                      {u.api_key.slice(0, 12)}...
-                    </span>
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs font-mono text-amber-400 bg-amber-500/10 px-2 py-1 rounded" dir="ltr">
+                        {u.api_key.slice(0, 12)}...
+                      </span>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(u.api_key!)
+                          alert('تم نسخ API Key!')
+                        }}
+                        className="px-1.5 py-1 rounded text-[10px] bg-white/5 hover:bg-white/10 transition-all"
+                        title="نسخ"
+                      >
+                        📋
+                      </button>
+                    </div>
                   ) : (
                     <span className="text-xs text-neutral-600">—</span>
                   )}
