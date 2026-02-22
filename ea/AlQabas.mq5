@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "AlQabas Pro"
 #property link      "https://qabas.pro"
-#property version   "1.02" // Updated version
+#property version   "1.03" // Updated version
 #property description "Auto-trading EA - Receives signals from TradeSignals Pro API"
 #property strict
 
@@ -22,6 +22,7 @@ input int      MaxTrades    = 5;                       // أقصى عدد صفق
 input int      Slippage     = 30;                      // الانزلاق السعري (نقاط)
 input int      MagicNumber  = 202601;                  // الرقم السحري للصفقات
 input bool     UseTrailing  = true;                    // تفعيل الوقف المتحرك
+input int      TrailingStopPoints = 50;                // مسافة الوقف المتحرك (نقاط)
 
 //--- إعدادات الرموز
 input group "=== Symbol Settings ==="
@@ -75,6 +76,95 @@ void OnTick()
    {
       CheckOrderQueue();
       lastOrderCheck = TimeCurrent();
+   }
+   
+   // تفعيل Trailing Stop
+   if(UseTrailing)
+   {
+      CheckTrailingStop();
+   }
+}
+
+//+------------------------------------------------------------------+
+//| وظيفة الوقف المتحرك (Trailing Stop)                              |
+//+------------------------------------------------------------------+
+void CheckTrailingStop()
+{
+   for(int i=OrdersTotal()-1; i>=0; i--)
+   {
+      ulong ticket = OrderGetTicket(i);
+      if(OrderSelect(ticket))
+      {
+         // Check Magic Number only, to handle all symbols traded by this EA
+         if(OrderGetInteger(ORDER_MAGIC) == MagicNumber)
+         {
+            string symbol = OrderGetString(ORDER_SYMBOL);
+            double sl = OrderGetDouble(ORDER_SL);
+            double tp = OrderGetDouble(ORDER_TP);
+            
+            // Use symbol-specific pricing
+            double price = (OrderGetInteger(ORDER_TYPE) == ORDER_TYPE_BUY) ? SymbolInfoDouble(symbol, SYMBOL_BID) : SymbolInfoDouble(symbol, SYMBOL_ASK);
+            double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+            
+            // Safety check for point
+            if(point == 0) continue;
+            
+            double trailDist = TrailingStopPoints * point; 
+            
+            if(OrderGetInteger(ORDER_TYPE) == ORDER_TYPE_BUY)
+            {
+               if(price - sl > trailDist)
+               {
+                  double newSL = price - trailDist;
+                  // Normalize double to avoid invalid stops
+                  newSL = NormalizeDouble(newSL, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS));
+                  
+                  if(newSL > sl)
+                  {
+                     MqlTradeRequest request;
+                     MqlTradeResult result;
+                     ZeroMemory(request);
+                     ZeroMemory(result);
+                     
+                     request.action = TRADE_ACTION_SLTP;
+                     request.order = ticket;
+                     request.symbol = symbol;
+                     request.sl = newSL;
+                     request.tp = tp;
+                     
+                     if(!OrderSend(request, result))
+                        Print("Failed to modify Buy Order ", ticket, " Error: ", GetLastError());
+                  }
+               }
+            }
+            else if(OrderGetInteger(ORDER_TYPE) == ORDER_TYPE_SELL)
+            {
+               if(sl - price > trailDist || sl == 0)
+               {
+                  double newSL = price + trailDist;
+                  // Normalize double
+                  newSL = NormalizeDouble(newSL, (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS));
+                  
+                  if(newSL < sl || sl == 0)
+                  {
+                     MqlTradeRequest request;
+                     MqlTradeResult result;
+                     ZeroMemory(request);
+                     ZeroMemory(result);
+                     
+                     request.action = TRADE_ACTION_SLTP;
+                     request.order = ticket;
+                     request.symbol = symbol;
+                     request.sl = newSL;
+                     request.tp = tp;
+                     
+                     if(!OrderSend(request, result))
+                        Print("Failed to modify Sell Order ", ticket, " Error: ", GetLastError());
+                  }
+               }
+            }
+         }
+      }
    }
 }
 
@@ -138,10 +228,11 @@ void CheckOrderQueue()
       if(StringFind(response, "\"orders\":[") == -1) return;
       
       // استخراج بيانات أول أمر في القائمة
-      // ملاحظة: هذا تحليل بسيط يفترض أن أول كائن هو الأمر المطلوب
       string orderId = GetJsonValue(response, "id");
       string action = GetJsonValue(response, "action");
       string symbol = GetJsonValue(response, "symbol");
+      double sl = StringToDouble(GetJsonValue(response, "stopLoss"));
+      double tp = StringToDouble(GetJsonValue(response, "takeProfit"));
       
       // التحقق من أن الأمر لنفس الزوج الحالي (اختياري، يمكن إزالته لتنفيذ كل الأزواج)
       // هنا سننفذ فقط إذا كان الرمز مطابقاً أو إذا كنا نريد تشغيل EA واحد لكل الأزواج
@@ -169,11 +260,11 @@ void CheckOrderQueue()
          
          if(action == "BUY")
          {
-            executed = ExecuteTrade(tradeSymbol, ORDER_TYPE_BUY);
+            executed = ExecuteTrade(tradeSymbol, ORDER_TYPE_BUY, sl, tp);
          }
          else if(action == "SELL")
          {
-            executed = ExecuteTrade(tradeSymbol, ORDER_TYPE_SELL);
+            executed = ExecuteTrade(tradeSymbol, ORDER_TYPE_SELL, sl, tp);
          }
          
          // إذا تم التنفيذ بنجاح (أو حتى فشل ولكن حاولنا)، نبلغ السيرفر لإيقاف التكرار
@@ -211,7 +302,7 @@ void MarkOrderExecuted(string orderId)
 //+------------------------------------------------------------------+
 //| تنفيذ صفقة                                                       |
 //+------------------------------------------------------------------+
-bool ExecuteTrade(string symbol, ENUM_ORDER_TYPE type)
+bool ExecuteTrade(string symbol, ENUM_ORDER_TYPE type, double sl, double tp)
 {
    // التحقق من عدم وجود صفقات مفتوحة كثيرة
    if(OrdersTotal() >= MaxTrades) 
@@ -237,11 +328,20 @@ bool ExecuteTrade(string symbol, ENUM_ORDER_TYPE type)
    request.volume = LotSize;
    request.type = type;
    request.price = (type == ORDER_TYPE_BUY) ? SymbolInfoDouble(symbol, SYMBOL_ASK) : SymbolInfoDouble(symbol, SYMBOL_BID);
+   request.sl = sl;
+   request.tp = tp;
    request.deviation = Slippage;
    request.magic = MagicNumber;
    request.comment = "Qabas.pro Signal";
    
-   // إضافة وقف الخسارة وجني الأرباح (اختياري - يمكن جلبه من الإشارة لاحقاً)
+   // تحديد نوع التنفيذ تلقائياً لتجنب الخطأ 4756
+   uint filling = (uint)SymbolInfoInteger(symbol, SYMBOL_FILLING_MODE);
+   if((filling & SYMBOL_FILLING_FOK) == SYMBOL_FILLING_FOK)
+      request.type_filling = ORDER_FILLING_FOK;
+   else if((filling & SYMBOL_FILLING_IOC) == SYMBOL_FILLING_IOC)
+      request.type_filling = ORDER_FILLING_IOC;
+   else
+      request.type_filling = ORDER_FILLING_RETURN;
    
    if(OrderSend(request, result))
    {
@@ -251,6 +351,6 @@ bool ExecuteTrade(string symbol, ENUM_ORDER_TYPE type)
    else
    {
       Print("Error executing trade on ", symbol, ": ", GetLastError());
-      return true; 
+      return true; // Return true to prevent infinite retry loops for the same signal
    }
 }
