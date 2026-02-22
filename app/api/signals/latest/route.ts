@@ -214,25 +214,25 @@ function analyzeForEA(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'DOWN' 
 
   if (action === 'BUY') {
     const nearSupport = sr.support.filter((s) => s < currentPrice).pop()
-    const atrSL = currentPrice - effectiveATR * 1.0
+    const atrSL = currentPrice - effectiveATR * 1.5
     stopLoss = nearSupport && nearSupport > atrSL
-      ? nearSupport - effectiveATR * 0.1
+      ? nearSupport - effectiveATR * 0.15
       : atrSL
 
     const nearResistance = sr.resistance.find((r) => r > currentPrice)
-    const atrTP = currentPrice + effectiveATR * 1.2
+    const atrTP = currentPrice + effectiveATR * 2.5
     takeProfit = nearResistance && nearResistance < atrTP * 1.5
       ? nearResistance - effectiveATR * 0.05
       : atrTP
   } else {
     const nearResistance = sr.resistance.find((r) => r > currentPrice)
-    const atrSL = currentPrice + effectiveATR * 1.0
+    const atrSL = currentPrice + effectiveATR * 1.5
     stopLoss = nearResistance && nearResistance < atrSL
-      ? nearResistance + effectiveATR * 0.1
+      ? nearResistance + effectiveATR * 0.15
       : atrSL
 
     const nearSupport = sr.support.filter((s) => s < currentPrice).pop()
-    const atrTP = currentPrice - effectiveATR * 1.2
+    const atrTP = currentPrice - effectiveATR * 2.5
     takeProfit = nearSupport && nearSupport > atrTP * 0.5
       ? nearSupport + effectiveATR * 0.05
       : atrTP

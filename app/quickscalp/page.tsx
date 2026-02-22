@@ -35,6 +35,10 @@ interface QuickScalpSignal {
   }
   momentum: 'STRONG_UP' | 'UP' | 'WEAK' | 'DOWN' | 'STRONG_DOWN'
   signalQuality: 'STRONG' | 'NORMAL' | 'WEAK'
+  confidence: number
+  confidenceLabel: string
+  signalSince: string
+  signalAgeSeconds: number
   reversalWarning: boolean
   reversalReason: string
   timestamp: string
@@ -803,6 +807,38 @@ export default function QuickScalpPage() {
                          sig.signalQuality === 'WEAK' ? '⚡ فوليوم ضعيف' :
                          '✓ إشارة عادية'}
                       </span>
+                    )}
+                    {/* Confidence + Signal Age */}
+                    {sig.action !== 'WAIT' && sig.confidence > 0 && (
+                      <div className="mt-1 flex flex-col items-center gap-0.5">
+                        <div className="flex items-center gap-1">
+                          <div className={`w-8 h-1.5 rounded-full overflow-hidden bg-surface`}>
+                            <div
+                              className={`h-full rounded-full transition-all ${
+                                sig.confidence >= 70 ? 'bg-bullish' :
+                                sig.confidence >= 50 ? 'bg-accent' :
+                                sig.confidence >= 35 ? 'bg-yellow-500' : 'bg-bearish'
+                              }`}
+                              style={{ width: `${sig.confidence}%` }}
+                            />
+                          </div>
+                          <span className={`text-[9px] font-bold font-mono ${
+                            sig.confidence >= 70 ? 'text-bullish' :
+                            sig.confidence >= 50 ? 'text-accent' :
+                            sig.confidence >= 35 ? 'text-yellow-400' : 'text-bearish'
+                          }`}>
+                            {sig.confidence}%
+                          </span>
+                        </div>
+                        <span className="text-[8px] text-neutral-500">
+                          {sig.signalAgeSeconds < 60
+                            ? `منذ ${sig.signalAgeSeconds} ث`
+                            : sig.signalAgeSeconds < 3600
+                              ? `منذ ${Math.floor(sig.signalAgeSeconds / 60)} د`
+                              : `منذ ${Math.floor(sig.signalAgeSeconds / 3600)} س`}
+                          {sig.signalAgeSeconds > 600 && ' ⚠️'}
+                        </span>
+                      </div>
                     )}
                   </div>
 

@@ -24,6 +24,9 @@ type ScalpAction = 'BUY' | 'SELL' | 'EXIT_BUY' | 'EXIT_SELL' | 'WAIT'
 const cache: Record<string, { data: any; timestamp: number }> = {}
 const CACHE_TTL = 10_000 // 10 seconds
 
+// === Signal age tracking: when each signal action first appeared ===
+const signalTracker: Record<string, { action: string; since: string }> = {}
+
 // === Simple rate limiting ===
 const rateLimiter: Record<string, number[]> = {}
 const RATE_LIMIT_WINDOW = 10_000 // 10 seconds
@@ -78,9 +81,67 @@ interface QuickScalpSignal {
   }
   momentum: 'STRONG_UP' | 'UP' | 'WEAK' | 'DOWN' | 'STRONG_DOWN'
   signalQuality: 'STRONG' | 'NORMAL' | 'WEAK'
+  confidence: number
+  confidenceLabel: string
+  signalSince: string
+  signalAgeSeconds: number
   reversalWarning: boolean
   reversalReason: string
   timestamp: string
+}
+
+// === Confidence Score Calculator ===
+function calcConfidence(
+  action: ScalpAction,
+  momentumScore: number,
+  vol: { spike: boolean; ratio: number },
+  emaTrend: string,
+  rsi: number,
+  htfTrend: string,
+  mtfTrend: string,
+  reversalWarning: boolean,
+  strongCandle: boolean
+): number {
+  if (action === 'WAIT') return 0
+
+  let score = 50 // base
+
+  // Momentum strength (+/- 15)
+  const absMomentum = Math.abs(momentumScore)
+  if (absMomentum >= 6) score += 15
+  else if (absMomentum >= 4) score += 10
+  else if (absMomentum >= 2) score += 5
+  else score -= 5
+
+  // Volume confirmation (+/- 10)
+  if (vol.spike) score += 10
+  else if (vol.ratio < 0.7) score -= 10
+
+  // Higher timeframe alignment (+/- 15)
+  const isBuy = action === 'BUY' || action === 'EXIT_SELL'
+  if (isBuy && htfTrend === 'UP') score += 8
+  if (isBuy && mtfTrend === 'UP') score += 7
+  if (!isBuy && htfTrend === 'DOWN') score += 8
+  if (!isBuy && mtfTrend === 'DOWN') score += 7
+
+  // EMA cross is strongest signal (+10)
+  if (emaTrend === 'CROSS_UP' && isBuy) score += 10
+  else if (emaTrend === 'CROSS_DOWN' && !isBuy) score += 10
+
+  // RSI in good zone (+5)
+  if (isBuy && rsi < 45) score += 5
+  else if (!isBuy && rsi > 55) score += 5
+  // RSI extreme against us (-10)
+  if (isBuy && rsi > 70) score -= 10
+  else if (!isBuy && rsi < 30) score -= 10
+
+  // Strong candle (+5)
+  if (strongCandle) score += 5
+
+  // Reversal warning (-15)
+  if (reversalWarning) score -= 15
+
+  return Math.max(10, Math.min(95, score))
 }
 
 function analyzeQuickScalp(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL', mtfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL'): QuickScalpSignal | null {
@@ -405,37 +466,37 @@ function analyzeQuickScalp(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'D
   if (action === 'BUY' || action === 'EXIT_SELL') {
     // SL: nearest support below price, or ATR-based
     const nearSupport = sr.support.filter((s) => s < currentPrice).pop()
-    const atrSL = currentPrice - effectiveATR * 1.0
+    const atrSL = currentPrice - effectiveATR * 1.5
     stopLoss = nearSupport && nearSupport > atrSL
-      ? nearSupport - effectiveATR * 0.1 // slightly below support
+      ? nearSupport - effectiveATR * 0.15 // slightly below support
       : atrSL
     // TP: nearest resistance above price, or ATR-based
     const nearResistance = sr.resistance.find((r) => r > currentPrice)
-    const atrTP = currentPrice + effectiveATR * 1.2
+    const atrTP = currentPrice + effectiveATR * 2.5
     target = nearResistance && nearResistance < atrTP * 1.5
       ? nearResistance - effectiveATR * 0.05 // slightly before resistance
       : atrTP
   } else if (action === 'SELL' || action === 'EXIT_BUY') {
     // SL: nearest resistance above price, or ATR-based
     const nearResistance = sr.resistance.find((r) => r > currentPrice)
-    const atrSL = currentPrice + effectiveATR * 1.0
+    const atrSL = currentPrice + effectiveATR * 1.5
     stopLoss = nearResistance && nearResistance < atrSL
-      ? nearResistance + effectiveATR * 0.1 // slightly above resistance
+      ? nearResistance + effectiveATR * 0.15 // slightly above resistance
       : atrSL
     // TP: nearest support below price, or ATR-based
     const nearSupport = sr.support.filter((s) => s < currentPrice).pop()
-    const atrTP = currentPrice - effectiveATR * 1.2
+    const atrTP = currentPrice - effectiveATR * 2.5
     target = nearSupport && nearSupport > atrTP * 0.5
       ? nearSupport + effectiveATR * 0.05 // slightly before support
       : atrTP
   } else {
     // WAIT — show hypothetical levels
     if (emaTrend === 'UP') {
-      stopLoss = currentPrice - effectiveATR * 1.0
-      target = currentPrice + effectiveATR * 1.2
+      stopLoss = currentPrice - effectiveATR * 1.5
+      target = currentPrice + effectiveATR * 2.5
     } else {
-      stopLoss = currentPrice + effectiveATR * 1.0
-      target = currentPrice - effectiveATR * 1.2
+      stopLoss = currentPrice + effectiveATR * 1.5
+      target = currentPrice - effectiveATR * 2.5
     }
   }
 
@@ -467,7 +528,7 @@ function analyzeQuickScalp(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'D
     WAIT: '⏳ انتظر',
   }
 
-  return {
+  const result: QuickScalpSignal = {
     id: `qs-${symbol}-${Date.now()}`,
     symbol,
     displaySymbol: formatSymbol(symbol),
@@ -500,10 +561,23 @@ function analyzeQuickScalp(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'D
       : (action !== 'WAIT' && !vol.spike && vol.ratio < 0.8)
         ? 'WEAK'
         : 'NORMAL',
+    confidence: calcConfidence(action, momentumScore, vol, emaTrend, rsi, htfTrend, mtfTrend, reversalWarning, strongCandle),
+    confidenceLabel: '',
+    signalSince: '',
+    signalAgeSeconds: 0,
     reversalWarning,
     reversalReason,
     timestamp: new Date().toISOString(),
   }
+
+  // Set confidence label
+  if (result.confidence >= 80) result.confidenceLabel = 'ثقة عالية جداً'
+  else if (result.confidence >= 65) result.confidenceLabel = 'ثقة عالية'
+  else if (result.confidence >= 50) result.confidenceLabel = 'ثقة متوسطة'
+  else if (result.confidence >= 35) result.confidenceLabel = 'ثقة منخفضة'
+  else result.confidenceLabel = 'ثقة ضعيفة'
+
+  return result
 }
 
 export async function GET(request: Request) {
@@ -579,8 +653,40 @@ export async function GET(request: Request) {
     })
 
     const results = await Promise.all(promises)
+    const now = new Date()
     for (const r of results) {
-      if (r) signals.push(r)
+      if (r) {
+        // Track signal age: when did this action first appear for this symbol?
+        const key = r.symbol
+        const tracked = signalTracker[key]
+        if (!tracked || tracked.action !== r.action) {
+          // New signal or action changed
+          signalTracker[key] = { action: r.action, since: now.toISOString() }
+          r.signalSince = now.toISOString()
+          r.signalAgeSeconds = 0
+        } else {
+          // Same signal still active
+          r.signalSince = tracked.since
+          r.signalAgeSeconds = Math.floor((now.getTime() - new Date(tracked.since).getTime()) / 1000)
+        }
+
+        // Reduce confidence based on signal age (older = less reliable)
+        if (r.action !== 'WAIT' && r.signalAgeSeconds > 0) {
+          const ageMinutes = r.signalAgeSeconds / 60
+          if (ageMinutes > 10) r.confidence = Math.max(10, r.confidence - 20)
+          else if (ageMinutes > 5) r.confidence = Math.max(10, r.confidence - 10)
+          else if (ageMinutes > 2) r.confidence = Math.max(10, r.confidence - 5)
+
+          // Update label after age adjustment
+          if (r.confidence >= 80) r.confidenceLabel = '\u062b\u0642\u0629 \u0639\u0627\u0644\u064a\u0629 \u062c\u062f\u0627\u064b'
+          else if (r.confidence >= 65) r.confidenceLabel = '\u062b\u0642\u0629 \u0639\u0627\u0644\u064a\u0629'
+          else if (r.confidence >= 50) r.confidenceLabel = '\u062b\u0642\u0629 \u0645\u062a\u0648\u0633\u0637\u0629'
+          else if (r.confidence >= 35) r.confidenceLabel = '\u062b\u0642\u0629 \u0645\u0646\u062e\u0641\u0636\u0629'
+          else r.confidenceLabel = '\u062b\u0642\u0629 \u0636\u0639\u064a\u0641\u0629'
+        }
+
+        signals.push(r)
+      }
     }
 
     // Sort: actionable signals first (BUY/SELL/EXIT), then WAIT
