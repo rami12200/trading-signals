@@ -1,18 +1,23 @@
 // ============================================
 // Trade Execution Queue API
-// POST: User clicks "Execute Trade" → saves order
-// GET: EA polls for pending orders → executes them
+// POST: User clicks "Execute Trade" → saves order (per-user)
+// GET: EA polls for pending orders → executes them (per-user)
 // ============================================
 
 import { NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 
-const EA_API_KEY = process.env.EA_API_KEY || 'ts_ea_test_key_2026_rami12200'
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+)
 
-// === In-memory order queue (will move to Supabase later) ===
+// === Per-user order queue ===
 interface TradeOrder {
   id: string
-  symbol: string       // BTCUSDT (Binance format)
-  mt5Symbol: string    // BTCUSD (MT5 format)
+  api_key: string
+  symbol: string
+  mt5Symbol: string
   action: 'BUY' | 'SELL'
   entry: number
   stopLoss: number
@@ -22,24 +27,61 @@ interface TradeOrder {
   executedAt?: string
 }
 
-// Global order queue
 const orderQueue: TradeOrder[] = []
+const ORDER_EXPIRY_MS = 30_000
 
-function validateApiKey(request: Request): boolean {
+function cleanExpiredOrders() {
+  const now = Date.now()
+  for (let i = orderQueue.length - 1; i >= 0; i--) {
+    const orderAge = now - new Date(orderQueue[i].createdAt).getTime()
+    if (orderQueue[i].status === 'PENDING' && orderAge > ORDER_EXPIRY_MS) {
+      orderQueue[i].status = 'FAILED'
+    }
+    if (orderQueue[i].status !== 'PENDING' && orderAge > 300_000) {
+      orderQueue.splice(i, 1)
+    }
+  }
+}
+
+function extractApiKey(request: Request): string | null {
   const authHeader = request.headers.get('authorization')
   if (authHeader?.startsWith('Bearer ')) {
-    return authHeader.slice(7) === EA_API_KEY
+    return authHeader.slice(7)
   }
   const url = new URL(request.url)
-  const keyParam = url.searchParams.get('key')
-  return keyParam === EA_API_KEY
+  return url.searchParams.get('key')
+}
+
+async function validateApiKey(apiKey: string): Promise<boolean> {
+  if (!apiKey) return false
+  const { data } = await supabaseAdmin
+    .from('profiles')
+    .select('id, plan')
+    .eq('api_key', apiKey)
+    .eq('plan', 'vip')
+    .single()
+  return !!data
 }
 
 // === POST /api/signals/execute — User sends trade order ===
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { symbol, action, entry, stopLoss, takeProfit } = body
+    const { symbol, action, entry, stopLoss, takeProfit, api_key } = body
+
+    if (!api_key) {
+      return NextResponse.json(
+        { success: false, error: 'API key is required' },
+        { status: 401 }
+      )
+    }
+
+    if (!(await validateApiKey(api_key))) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid API key or not VIP' },
+        { status: 401 }
+      )
+    }
 
     if (!symbol || !action || !entry) {
       return NextResponse.json(
@@ -55,11 +97,11 @@ export async function POST(request: Request) {
       )
     }
 
-    // Convert Binance symbol to MT5 format
     const mt5Symbol = symbol.replace('USDT', 'USD')
 
     const order: TradeOrder = {
       id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+      api_key,
       symbol,
       mt5Symbol,
       action,
@@ -72,9 +114,12 @@ export async function POST(request: Request) {
 
     orderQueue.push(order)
 
-    // Keep only last 50 orders
-    if (orderQueue.length > 50) {
-      orderQueue.splice(0, orderQueue.length - 50)
+    // Keep only last 50 orders per user
+    const userOrders = orderQueue.filter((o) => o.api_key === api_key)
+    if (userOrders.length > 50) {
+      const oldest = userOrders[0]
+      const idx = orderQueue.indexOf(oldest)
+      if (idx !== -1) orderQueue.splice(idx, 1)
     }
 
     return NextResponse.json({
@@ -91,7 +136,7 @@ export async function POST(request: Request) {
         status: order.status,
       },
     })
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { success: false, error: 'Invalid request body' },
       { status: 400 }
@@ -101,7 +146,8 @@ export async function POST(request: Request) {
 
 // === GET /api/signals/execute — EA polls for pending orders ===
 export async function GET(request: Request) {
-  if (!validateApiKey(request)) {
+  const apiKey = extractApiKey(request)
+  if (!apiKey || !(await validateApiKey(apiKey))) {
     return NextResponse.json(
       { success: false, error: 'Invalid API key' },
       { status: 401 }
@@ -109,11 +155,11 @@ export async function GET(request: Request) {
   }
 
   const { searchParams } = new URL(request.url)
-  const markExecuted = searchParams.get('executed') // order ID to mark as executed
+  const markExecuted = searchParams.get('executed')
 
-  // Mark order as executed if ID provided
+  // Mark order as executed (only if it belongs to this user)
   if (markExecuted) {
-    const order = orderQueue.find((o) => o.id === markExecuted)
+    const order = orderQueue.find((o) => o.id === markExecuted && o.api_key === apiKey)
     if (order) {
       order.status = 'EXECUTED'
       order.executedAt = new Date().toISOString()
@@ -122,13 +168,15 @@ export async function GET(request: Request) {
     return NextResponse.json({ success: false, error: 'Order not found' }, { status: 404 })
   }
 
-  // Return pending orders
-  const pendingOrders = orderQueue.filter((o) => o.status === 'PENDING')
+  cleanExpiredOrders()
+
+  // Return only THIS user's pending orders
+  const pendingOrders = orderQueue.filter((o) => o.status === 'PENDING' && o.api_key === apiKey)
 
   return NextResponse.json({
     success: true,
     count: pendingOrders.length,
-    orders: pendingOrders,
+    orders: pendingOrders.map(({ api_key: _key, ...rest }) => rest),
     timestamp: new Date().toISOString(),
   })
 }

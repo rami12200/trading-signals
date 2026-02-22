@@ -22,9 +22,10 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
 
-// === Manual order queue (shared in this module) ===
+// === Manual order queue (per-user via api_key) ===
 interface TradeOrder {
   id: string
+  api_key: string
   symbol: string
   mt5Symbol: string
   action: 'BUY' | 'SELL'
@@ -289,7 +290,14 @@ function isRateLimited(key: string): boolean {
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { symbol, action, entry, stopLoss, takeProfit } = body
+    const { symbol, action, entry, stopLoss, takeProfit, api_key } = body
+
+    if (!api_key) {
+      return NextResponse.json(
+        { success: false, error: 'API key is required' },
+        { status: 401 }
+      )
+    }
 
     if (!symbol || !action || !entry) {
       return NextResponse.json(
@@ -305,10 +313,26 @@ export async function POST(request: Request) {
       )
     }
 
+    // Validate that this api_key belongs to a VIP user
+    const { data: profile } = await supabaseAdmin
+      .from('profiles')
+      .select('id, plan')
+      .eq('api_key', api_key)
+      .eq('plan', 'vip')
+      .single()
+
+    if (!profile) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid API key or not VIP' },
+        { status: 401 }
+      )
+    }
+
     const mt5Symbol = symbol.replace('USDT', 'USD')
 
     const order: TradeOrder = {
       id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+      api_key,
       symbol,
       mt5Symbol,
       action,
@@ -321,9 +345,12 @@ export async function POST(request: Request) {
 
     orderQueue.push(order)
 
-    // Keep only last 50 orders
-    if (orderQueue.length > 50) {
-      orderQueue.splice(0, orderQueue.length - 50)
+    // Keep only last 50 orders per user
+    const userOrders = orderQueue.filter((o) => o.api_key === api_key)
+    if (userOrders.length > 50) {
+      const oldest = userOrders[0]
+      const idx = orderQueue.indexOf(oldest)
+      if (idx !== -1) orderQueue.splice(idx, 1)
     }
 
     return NextResponse.json({
@@ -373,9 +400,9 @@ export async function GET(request: Request) {
 
   // === Mode: Manual Orders (EA polls for user-clicked trades) ===
   if (mode === 'orders') {
-    // Mark order as executed if ID provided
+    // Mark order as executed if ID provided (only if it belongs to this user)
     if (markExecuted) {
-      const order = orderQueue.find((o) => o.id === markExecuted)
+      const order = orderQueue.find((o) => o.id === markExecuted && o.api_key === apiKey)
       if (order) {
         order.status = 'EXECUTED'
         order.executedAt = new Date().toISOString()
@@ -387,12 +414,12 @@ export async function GET(request: Request) {
     // Clean expired orders first
     cleanExpiredOrders()
 
-    // Return only valid pending orders (not expired)
-    const pendingOrders = orderQueue.filter((o) => o.status === 'PENDING')
+    // Return only THIS user's pending orders
+    const pendingOrders = orderQueue.filter((o) => o.status === 'PENDING' && o.api_key === apiKey)
     return NextResponse.json({
       success: true,
       count: pendingOrders.length,
-      orders: pendingOrders,
+      orders: pendingOrders.map(({ api_key: _key, ...rest }) => rest),
       timestamp: new Date().toISOString(),
     })
   }
