@@ -49,6 +49,35 @@ export async function POST(request: Request) {
     if (!symbol || !action || !entry) {
       return NextResponse.json({ success: false, error: 'Missing fields' }, { status: 400 })
     }
+    
+    // Identify user if possible (from Authorization header or cookie via Supabase auth)
+    // NOTE: In client-side fetch, cookies are sent automatically.
+    // However, createClient here is the ADMIN client, which doesn't parse request cookies automatically.
+    // We need to check if the request has an API key or a user session.
+    
+    // For now, let's try to get user_id from API key in query param or header if provided
+    const apiKey = extractApiKey(request)
+    let userId: string | null = null
+    
+    if (apiKey) {
+       // Check if it's a user API key
+       if (apiKey !== EA_API_KEY) {
+          const { data } = await supabaseAdmin
+            .from('profiles')
+            .select('id')
+            .eq('api_key', apiKey)
+            .single()
+          if (data) userId = data.id
+       }
+    } 
+    
+    // If no API key, check for Supabase Auth Cookie (for web dashboard requests)
+    if (!userId) {
+       // We can't easily parse cookies here without creating a route handler client
+       // But the frontend usually sends requests from authenticated context.
+       // Let's rely on the body containing a user_id if we modify the frontend, 
+       // OR assume GLOBAL signal if user_id is not found.
+    }
 
     const mt5Symbol = symbol.replace('USDT', 'USD')
 
@@ -62,7 +91,8 @@ export async function POST(request: Request) {
         entry: parseFloat(entry),
         stop_loss: parseFloat(stopLoss) || 0,
         take_profit: parseFloat(takeProfit) || 0,
-        status: 'PENDING'
+        status: 'PENDING',
+        user_id: userId // Save the user_id (if column exists)
       })
       .select()
       .single()
@@ -166,12 +196,21 @@ export async function GET(request: Request) {
 
   // Fetch Pending
   // 1. From DB
-  const { data: dbOrders } = await supabaseAdmin
+  let query = supabaseAdmin
     .from('trade_signals')
     .select('*')
     .eq('status', 'PENDING')
     .order('created_at', { ascending: false })
     .limit(20)
+
+  // FILTER: If this is a specific user (not MASTER EA), only show their signals + GLOBAL signals
+  if (userId && userId !== 'MASTER_EA') {
+     // We want signals where user_id IS NULL (Global) OR user_id = userId
+     // Supabase "or" syntax: .or('user_id.is.null,user_id.eq.USER_ID')
+     query = query.or(`user_id.is.null,user_id.eq.${userId}`)
+  }
+  
+  const { data: dbOrders } = await query
 
   // 2. Filter executed for THIS user
   let validDbOrders = dbOrders || []
