@@ -27,6 +27,7 @@ interface TradeOrder {
   status: 'PENDING' | 'EXECUTED' | 'FAILED'
   createdAt: string
   executedAt?: string
+  executedUsers?: Set<string> // Track per-user execution in memory
 }
 const fallbackQueue: TradeOrder[] = []
 
@@ -37,24 +38,6 @@ function extractApiKey(request: Request): string | null {
   }
   const url = new URL(request.url)
   return url.searchParams.get('key')
-}
-
-async function validateApiKey(request: Request): Promise<boolean> {
-  const apiKey = extractApiKey(request)
-  if (!apiKey) return false
-
-  // EA Key check
-  if (apiKey === EA_API_KEY) return true
-
-  // User Key check
-  const { data } = await supabaseAdmin
-    .from('profiles')
-    .select('id, plan, api_key')
-    .eq('api_key', apiKey)
-    .eq('plan', 'vip')
-    .single()
-
-  return !!data
 }
 
 // === POST /api/signals/execute ===
@@ -97,6 +80,7 @@ export async function POST(request: Request) {
         takeProfit: parseFloat(takeProfit) || 0,
         status: 'PENDING',
         createdAt: new Date().toISOString(),
+        executedUsers: new Set()
       }
       fallbackQueue.push(order)
       return NextResponse.json({ success: true, message: 'Queued (Memory)', order })
@@ -114,27 +98,64 @@ export async function GET(request: Request) {
   const url = new URL(request.url)
   const apiKey = extractApiKey(request)
   
-  // Basic validation (allow if key present, strict check can be added)
+  // Basic validation
   if (!apiKey) {
     return NextResponse.json({ success: false, error: 'Missing API Key' }, { status: 401 })
+  }
+
+  // 1. Identify User
+  let userId: string | null = null
+  if (apiKey === EA_API_KEY) {
+    userId = 'MASTER_EA'
+  } else {
+    const { data } = await supabaseAdmin
+      .from('profiles')
+      .select('id')
+      .eq('api_key', apiKey)
+      .single()
+    
+    if (data) userId = data.id
+  }
+
+  if (!userId) {
+    return NextResponse.json({ success: false, error: 'Invalid API Key' }, { status: 401 })
   }
 
   const markExecuted = url.searchParams.get('executed')
 
   // Mark as executed
   if (markExecuted) {
-    // Try DB
-    const { error } = await supabaseAdmin
-      .from('trade_signals')
-      .update({ status: 'EXECUTED', executed_at: new Date().toISOString() })
-      .eq('id', markExecuted)
-    
-    if (error) {
-      // Try Memory
+    if (userId === 'MASTER_EA') {
+      // Legacy: Update global status
+      await supabaseAdmin
+        .from('trade_signals')
+        .update({ status: 'EXECUTED', executed_at: new Date().toISOString() })
+        .eq('id', markExecuted)
+      
+      // Memory
       const memOrder = fallbackQueue.find(o => o.id === markExecuted)
       if (memOrder) {
         memOrder.status = 'EXECUTED'
         memOrder.executedAt = new Date().toISOString()
+      }
+    } else {
+      // User-specific execution
+      // Try to insert execution record
+      const { error } = await supabaseAdmin
+        .from('user_signal_executions')
+        .insert({
+          user_id: userId,
+          signal_id: markExecuted
+        })
+      
+      if (error) {
+        // Fallback to memory tracking if DB fails or table missing
+        // Note: If table is missing, this will fail silently here but memory queue will work for memory orders
+        const memOrder = fallbackQueue.find(o => o.id === markExecuted)
+        if (memOrder) {
+          if (!memOrder.executedUsers) memOrder.executedUsers = new Set()
+          memOrder.executedUsers.add(userId)
+        }
       }
     }
     
@@ -148,14 +169,33 @@ export async function GET(request: Request) {
     .select('*')
     .eq('status', 'PENDING')
     .order('created_at', { ascending: false })
-    .limit(10)
+    .limit(20)
 
-  // 2. From Memory
-  const memOrders = fallbackQueue.filter(o => o.status === 'PENDING')
+  // 2. Filter executed for THIS user
+  let validDbOrders = dbOrders || []
+  if (userId !== 'MASTER_EA' && validDbOrders.length > 0) {
+    // Fetch executions for this user
+    const signalIds = validDbOrders.map((o: any) => o.id)
+    const { data: executions } = await supabaseAdmin
+      .from('user_signal_executions')
+      .select('signal_id')
+      .eq('user_id', userId)
+      .in('signal_id', signalIds)
+    
+    const executedIds = new Set(executions?.map((e: any) => e.signal_id) || [])
+    validDbOrders = validDbOrders.filter((o: any) => !executedIds.has(o.id))
+  }
+
+  // 3. From Memory
+  const memOrders = fallbackQueue.filter(o => {
+    if (o.status !== 'PENDING') return false
+    if (userId === 'MASTER_EA') return true
+    return !o.executedUsers?.has(userId!)
+  })
 
   // Combine (Map DB fields to API format)
   const orders = [
-    ...(dbOrders || []).map((o: any) => ({
+    ...validDbOrders.map((o: any) => ({
       id: o.id,
       symbol: o.symbol,
       mt5Symbol: o.mt5_symbol,
