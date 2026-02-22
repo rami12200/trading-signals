@@ -3,7 +3,15 @@ import { createClient } from '@supabase/supabase-js'
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    storageKey: 'sb-qabas-auth',
+    detectSessionInUrl: true,
+    lock: async (name: string, acquireTimeout: number, fn: () => Promise<any>) => {
+      return await fn()
+    },
+  },
+})
 
 // Server-side client with service role (for API routes)
 export function getServiceSupabase() {

@@ -18,11 +18,21 @@ export function ProtectedPage({ children, requiredPlan = 'free', pageName, featu
   const [checking, setChecking] = useState(true)
 
   useEffect(() => {
-    if (loading || !user) { setChecking(false); return }
-    getPlanPermissions(user.plan).then((p) => {
-      setPerms(p)
-      setChecking(false)
-    })
+    if (loading) return
+    if (!user) { setChecking(false); return }
+
+    // Timeout — don't block more than 3s
+    const timeout = setTimeout(() => setChecking(false), 3000)
+
+    getPlanPermissions(user.plan)
+      .then((p) => setPerms(p))
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(timeout)
+        setChecking(false)
+      })
+
+    return () => clearTimeout(timeout)
   }, [user, loading])
 
   if (loading || checking) {

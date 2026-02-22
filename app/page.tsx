@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { HomePricing } from '@/components/HomePricing'
 
 export default function HomePage() {
   return (
@@ -158,35 +159,7 @@ export default function HomePage() {
         <h2 className="text-3xl font-bold mb-3 text-center">خطط الاشتراك</h2>
         <p className="text-neutral-500 text-center mb-14">اختر الخطة المناسبة لك</p>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-5xl mx-auto">
-          <PricingCard
-            name="مجاني"
-            price="0"
-            period="للأبد"
-            features={['إشارات متأخرة (15 دقيقة)', '3 عملات فقط', 'بدون تنبيهات', 'بدون تتبع صفقات']}
-            cta="ابدأ مجاناً"
-            href="/register"
-            popular={false}
-          />
-          <PricingCard
-            name="Pro"
-            price="49"
-            period="/شهر"
-            features={['إشارات لحظية فورية', 'جميع العملات (10+)', 'تنبيهات صوتية + إشعارات', 'تتبع صفقات + إحصائيات', 'دعم فني أولوية']}
-            cta="ابدأ تجربة مجانية"
-            href="/register"
-            popular={true}
-          />
-          <PricingCard
-            name="Enterprise"
-            price="149"
-            period="/شهر"
-            features={['كل مميزات Pro', 'API خاص', 'إشارات Telegram/Discord', 'مدير حساب مخصص', 'تحليلات متقدمة']}
-            cta="تواصل معنا"
-            href="/register"
-            popular={false}
-          />
-        </div>
+        <HomePricing />
       </section>
 
       {/* Testimonials */}
@@ -283,44 +256,6 @@ function FeatureCard({ icon, title, desc }: { icon: string; title: string; desc:
   )
 }
 
-function PricingCard({ name, price, period, features, cta, href, popular }: {
-  name: string; price: string; period: string; features: string[]; cta: string; href: string; popular: boolean
-}) {
-  return (
-    <div className={`card relative ${popular ? 'border-accent/40 bg-accent/[0.03] scale-105' : 'border-white/[0.06]'}`}>
-      {popular && (
-        <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 bg-accent text-white text-xs font-bold rounded-full">
-          الأكثر شعبية
-        </div>
-      )}
-      <div className="text-center mb-6">
-        <h3 className="font-bold text-lg mb-2">{name}</h3>
-        <div className="flex items-baseline justify-center gap-1">
-          <span className="text-4xl font-bold text-gradient">${price}</span>
-          <span className="text-sm text-neutral-500">{period}</span>
-        </div>
-      </div>
-      <div className="space-y-3 mb-8">
-        {features.map((f, i) => (
-          <div key={i} className="flex items-center gap-2 text-sm">
-            <span className="text-accent text-xs">✓</span>
-            <span className="text-neutral-300">{f}</span>
-          </div>
-        ))}
-      </div>
-      <Link
-        href={href}
-        className={`block text-center py-3 rounded-xl font-bold text-sm transition-all ${
-          popular
-            ? 'bg-accent hover:bg-accent/80 text-white shadow-lg shadow-accent/20'
-            : 'bg-surface border border-white/10 hover:bg-surface-light text-white'
-        }`}
-      >
-        {cta}
-      </Link>
-    </div>
-  )
-}
 
 function TestimonialCard({ name, role, text, rating }: { name: string; role: string; text: string; rating: number }) {
   return (

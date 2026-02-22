@@ -44,21 +44,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
+    let mounted = true
+
+    // Timeout fallback — never stay loading more than 5s
+    const timeout = setTimeout(() => {
+      if (mounted) setLoading(false)
+    }, 5000)
+
     // Get initial session
     supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!mounted) return
       if (session?.user) {
-        const profile = await fetchProfile(session.user.id)
-        setUser(profile)
+        try {
+          const profile = await fetchProfile(session.user.id)
+          if (mounted) setUser(profile)
+        } catch {}
       }
-      setLoading(false)
+      if (mounted) setLoading(false)
+    }).catch(() => {
+      if (mounted) setLoading(false)
     })
 
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (_event, session) => {
+        if (!mounted) return
         if (session?.user) {
-          const profile = await fetchProfile(session.user.id)
-          setUser(profile)
+          try {
+            const profile = await fetchProfile(session.user.id)
+            if (mounted) setUser(profile)
+          } catch {}
         } else {
           setUser(null)
         }
@@ -66,7 +81,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     )
 
-    return () => subscription.unsubscribe()
+    return () => {
+      mounted = false
+      clearTimeout(timeout)
+      subscription.unsubscribe()
+    }
   }, [])
 
   const handleSignOut = async () => {
