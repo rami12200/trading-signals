@@ -52,9 +52,9 @@ export default function PremiumPage() {
             description="حمّل ملف TradeSignalsPro.mq5 من الرابط أدناه"
           >
             <a
-              href="https://github.com/rami12200/trading-signals/raw/main/ea/TradeSignalsPro.mq5"
+              href="/api/download/ea"
               className="btn-primary text-sm !px-6 !py-2 inline-block mt-3"
-              target="_blank"
+              download="TradeSignalsPro.mq5"
             >
               ⬇️ تحميل TradeSignalsPro.mq5
             </a>
@@ -100,7 +100,7 @@ export default function PremiumPage() {
               <p>2. فعّل ✅ <strong>Allow WebRequest for listed URL</strong></p>
               <p>3. أضف هذا الرابط:</p>
               <p className="font-mono text-accent text-xs bg-accent/10 rounded px-2 py-1 mt-1 inline-block">
-                https://trading-signals-livid.vercel.app
+                https://qabas.pro
               </p>
             </div>
           </StepCard>

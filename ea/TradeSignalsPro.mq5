@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                            TradeSignalsPro.mq5   |
 //|                        Copyright 2026, TradeSignals Pro           |
-//|                  https://trading-signals-livid.vercel.app         |
+//|                  https://qabas.pro         |
 //+------------------------------------------------------------------+
 #property copyright "TradeSignals Pro"
-#property link      "https://trading-signals-livid.vercel.app"
+#property link      "https://qabas.pro"
 #property version   "1.00"
 #property description "Auto-trading EA - Receives signals from TradeSignals Pro API"
 #property strict
@@ -16,7 +16,7 @@
 //| Input Parameters                                                  |
 //+------------------------------------------------------------------+
 input group "=== API Settings ==="
-input string   InpApiUrl       = "https://trading-signals-livid.vercel.app/api/signals/latest"; // Signal API URL
+input string   InpApiUrl       = "https://qabas.pro/api/signals/latest"; // Signal API URL
 input string   InpApiKey       = "";                    // API Key (required)
 input int      InpPollSeconds  = 5;                     // Poll interval (seconds)
 input string   InpInterval     = "5m";                  // Candle interval (5m, 15m)

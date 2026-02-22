@@ -23,7 +23,7 @@ C:\Users\[اسمك]\AppData\Roaming\MetaQuotes\Terminal\[ID]\MQL5\Experts\
 ### 3. السماح بـ WebRequest
 - في MT5 روح لـ **Tools > Options > Expert Advisors**
 - فعّل **Allow WebRequest for listed URL**
-- أضف: `https://trading-signals-livid.vercel.app`
+- أضف: `https://qabas.pro`
 - اضغط OK
 
 ### 4. تشغيل الـ EA
