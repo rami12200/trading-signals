@@ -108,6 +108,8 @@ export async function GET(request: Request) {
   if (apiKey === EA_API_KEY) {
     userId = 'MASTER_EA'
   } else {
+    // FIX: Using supabaseAdmin (service role) to bypass RLS when looking up profile by API Key
+    // This is crucial because standard client might not have access to read all profiles
     const { data } = await supabaseAdmin
       .from('profiles')
       .select('id')
@@ -194,6 +196,7 @@ export async function GET(request: Request) {
   })
 
   // Combine (Map DB fields to API format)
+  // Ensure we don't return duplicates if logic overlaps
   const orders = [
     ...validDbOrders.map((o: any) => ({
       id: o.id,
