@@ -1,9 +1,9 @@
-# TradeSignals Pro - MT5 Expert Advisor
+# القبس - AlQabas MT5 Expert Advisor
 
 ## التثبيت
 
 ### 1. انسخ ملف الـ EA
-انسخ ملف `TradeSignalsPro.mq5` إلى مجلد الـ Experts في MT5:
+انسخ ملف `AlQabas.mq5` إلى مجلد الـ Experts في MT5:
 ```
 C:\Users\[اسمك]\AppData\Roaming\MetaQuotes\Terminal\[ID]\MQL5\Experts\
 ```
@@ -16,7 +16,7 @@ C:\Users\[اسمك]\AppData\Roaming\MetaQuotes\Terminal\[ID]\MQL5\Experts\
 
 ### 2. Compile الـ EA
 - افتح **MetaEditor** (F4)
-- افتح ملف `TradeSignalsPro.mq5`
+- افتح ملف `AlQabas.mq5`
 - اضغط **Compile** (F7)
 - تأكد ما فيه أخطاء
 
