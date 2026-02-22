@@ -15,9 +15,12 @@ import {
   findSupportResistance,
   OHLCV,
 } from '@/lib/indicators'
+import { createClient } from '@supabase/supabase-js'
 
-// === API Key validation (temporary - will use Supabase later) ===
-const EA_API_KEY = process.env.EA_API_KEY || 'ts_ea_test_key_2026_rami12200'
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+)
 
 // === Manual order queue (shared in this module) ===
 interface TradeOrder {
@@ -51,14 +54,27 @@ function cleanExpiredOrders() {
   }
 }
 
-function validateApiKey(request: Request): boolean {
+function extractApiKey(request: Request): string | null {
   const authHeader = request.headers.get('authorization')
   if (authHeader?.startsWith('Bearer ')) {
-    return authHeader.slice(7) === EA_API_KEY
+    return authHeader.slice(7)
   }
   const url = new URL(request.url)
-  const keyParam = url.searchParams.get('key')
-  return keyParam === EA_API_KEY
+  return url.searchParams.get('key')
+}
+
+async function validateApiKey(request: Request): Promise<boolean> {
+  const apiKey = extractApiKey(request)
+  if (!apiKey) return false
+
+  const { data } = await supabaseAdmin
+    .from('profiles')
+    .select('id, plan')
+    .eq('api_key', apiKey)
+    .eq('plan', 'vip')
+    .single()
+
+  return !!data
 }
 
 // === Cache ===
@@ -335,7 +351,7 @@ export async function POST(request: Request) {
 // === GET: EA polls for pending orders OR auto signals ===
 export async function GET(request: Request) {
   // Validate API Key
-  if (!validateApiKey(request)) {
+  if (!(await validateApiKey(request))) {
     return NextResponse.json(
       { success: false, error: 'Invalid API key' },
       { status: 401 }
@@ -343,7 +359,8 @@ export async function GET(request: Request) {
   }
 
   // Rate limiting by API key
-  if (isRateLimited(EA_API_KEY)) {
+  const apiKey = extractApiKey(request) || 'unknown'
+  if (isRateLimited(apiKey)) {
     return NextResponse.json(
       { success: false, error: 'Rate limit exceeded. Max 20 requests per 10 seconds.' },
       { status: 429 }
