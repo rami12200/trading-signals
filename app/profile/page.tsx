@@ -38,6 +38,8 @@ export default function ProfilePage() {
   const { user, loading: authLoading, signOut } = useAuth()
   const [history, setHistory] = useState<ClosedTrade[]>([])
   const [activeTrades, setActiveTrades] = useState(0)
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -189,6 +191,40 @@ export default function ProfilePage() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* API Key for VIP */}
+      {user.plan === 'vip' && user.api_key && (
+        <div className="card mb-6 border-purple-500/20 bg-gradient-to-r from-purple-500/[0.03] to-amber-500/[0.03]">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-lg">🔑</span>
+            <h3 className="font-bold">API Key — للربط مع MT5 / EA</h3>
+          </div>
+          <div className="flex items-center gap-2 bg-black/30 rounded-lg px-4 py-3 mb-3">
+            <code className="flex-1 text-sm font-mono text-amber-400 break-all" dir="ltr">
+              {showApiKey ? user.api_key : '•'.repeat(40)}
+            </code>
+            <button
+              onClick={() => setShowApiKey(!showApiKey)}
+              className="px-2 py-1 rounded text-xs bg-white/5 hover:bg-white/10 transition-all shrink-0"
+            >
+              {showApiKey ? '🙈 إخفاء' : '👁️ عرض'}
+            </button>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(user.api_key || '')
+                setCopied(true)
+                setTimeout(() => setCopied(false), 2000)
+              }}
+              className="px-2 py-1 rounded text-xs bg-accent/10 text-accent hover:bg-accent/20 transition-all shrink-0"
+            >
+              {copied ? '✅ تم النسخ' : '📋 نسخ'}
+            </button>
+          </div>
+          <p className="text-xs text-neutral-500">
+            استخدم هذا المفتاح في Expert Advisor على MT5. لا تشاركه مع أحد.
+          </p>
         </div>
       )}
 

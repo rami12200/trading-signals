@@ -53,6 +53,7 @@ interface User {
   email: string
   name: string
   plan: string
+  api_key: string | null
   is_admin: boolean
   created_at: string
 }
@@ -158,6 +159,20 @@ export default function AdminPage() {
     fetchUsers()
   }
 
+  const regenerateApiKey = async (userId: string) => {
+    if (!confirm('هل تريد تجديد API Key؟ المفتاح القديم سيتوقف عن العمل.')) return
+    const token = await getToken()
+    const res = await fetch('/api/admin/users', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ id: userId, regenerate_api_key: true }),
+    })
+    const json = await res.json()
+    if (json.error) { setMsg('❌ ' + json.error); return }
+    setMsg('✅ تم تجديد API Key')
+    fetchUsers()
+  }
+
   const toggleAdmin = async (userId: string, isAdminNow: boolean) => {
     const token = await getToken()
     await fetch('/api/admin/users', {
@@ -230,6 +245,7 @@ export default function AdminPage() {
           setEditingUser={setEditingUser}
           updateUserPlan={updateUserPlan}
           toggleAdmin={toggleAdmin}
+          regenerateApiKey={regenerateApiKey}
         />
       )}
     </main>
@@ -532,7 +548,7 @@ function PlanForm({
 }
 
 function UsersTab({
-  users, plans, editingUser, setEditingUser, updateUserPlan, toggleAdmin,
+  users, plans, editingUser, setEditingUser, updateUserPlan, toggleAdmin, regenerateApiKey,
 }: {
   users: User[]
   plans: Plan[]
@@ -540,6 +556,7 @@ function UsersTab({
   setEditingUser: (u: User | null) => void
   updateUserPlan: (id: string, plan: string) => void
   toggleAdmin: (id: string, isAdmin: boolean) => void
+  regenerateApiKey: (id: string) => void
 }) {
   const [search, setSearch] = useState('')
   const filtered = users.filter(
@@ -571,6 +588,7 @@ function UsersTab({
               <th className="text-right p-3">المستخدم</th>
               <th className="text-right p-3">الإيميل</th>
               <th className="text-right p-3">الباقة</th>
+              <th className="text-right p-3">API Key</th>
               <th className="text-right p-3">الصلاحية</th>
               <th className="text-right p-3">تاريخ التسجيل</th>
               <th className="text-right p-3">إجراءات</th>
@@ -596,6 +614,15 @@ function UsersTab({
                     <span className={`text-xs px-2 py-1 rounded font-bold ${planBadge(u.plan)}`}>
                       {u.plan.toUpperCase()}
                     </span>
+                  )}
+                </td>
+                <td className="p-3">
+                  {u.api_key ? (
+                    <span className="text-xs font-mono text-amber-400 bg-amber-500/10 px-2 py-1 rounded" dir="ltr">
+                      {u.api_key.slice(0, 12)}...
+                    </span>
+                  ) : (
+                    <span className="text-xs text-neutral-600">—</span>
                   )}
                 </td>
                 <td className="p-3">
@@ -637,6 +664,14 @@ function UsersTab({
                         >
                           {u.is_admin ? '🔓 إزالة أدمن' : '🔒 أدمن'}
                         </button>
+                        {u.plan === 'vip' && (
+                          <button
+                            onClick={() => regenerateApiKey(u.id)}
+                            className="px-2 py-1 rounded text-xs bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
+                          >
+                            🔑 {u.api_key ? 'تجديد Key' : 'توليد Key'}
+                          </button>
+                        )}
                       </>
                     )}
                   </div>

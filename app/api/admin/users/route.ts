@@ -1,10 +1,15 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import crypto from 'crypto'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 )
+
+function generateApiKey(): string {
+  return 'qbs_' + crypto.randomBytes(24).toString('hex')
+}
 
 async function isAdmin(request: Request) {
   const authHeader = request.headers.get('authorization')
@@ -45,6 +50,28 @@ export async function PUT(request: Request) {
   const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() }
   if (body.plan !== undefined) updateData.plan = body.plan
   if (body.is_admin !== undefined) updateData.is_admin = body.is_admin
+
+  // Auto-generate API key when upgrading to VIP
+  if (body.plan === 'vip') {
+    const { data: current } = await supabase
+      .from('profiles')
+      .select('api_key')
+      .eq('id', body.id)
+      .single()
+    if (!current?.api_key) {
+      updateData.api_key = generateApiKey()
+    }
+  }
+
+  // Remove API key when downgrading from VIP
+  if (body.plan && body.plan !== 'vip') {
+    updateData.api_key = null
+  }
+
+  // Manual API key regeneration
+  if (body.regenerate_api_key) {
+    updateData.api_key = generateApiKey()
+  }
 
   const { data, error } = await supabase
     .from('profiles')
