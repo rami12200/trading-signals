@@ -72,6 +72,8 @@ interface ClosedTrade {
 const TRADES_KEY = 'quickscalp_my_trades'
 const HISTORY_KEY = 'quickscalp_trade_history'
 const LAST_SIGNALS_KEY = 'quickscalp_last_signals'
+const FAVORITES_KEY = 'quickscalp_favorites'
+const SHOW_FAV_KEY = 'quickscalp_show_fav_only'
 
 function loadTrades(): MyTrade[] {
   if (typeof window === 'undefined') return []
@@ -84,6 +86,31 @@ function loadTrades(): MyTrade[] {
 function saveTrades(trades: MyTrade[]) {
   if (typeof window === 'undefined') return
   localStorage.setItem(TRADES_KEY, JSON.stringify(trades))
+}
+
+function loadFavorites(): string[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = localStorage.getItem(FAVORITES_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch { return [] }
+}
+
+function saveFavorites(favs: string[]) {
+  if (typeof window === 'undefined') return
+  localStorage.setItem(FAVORITES_KEY, JSON.stringify(favs))
+}
+
+function loadShowFavOnly(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return localStorage.getItem(SHOW_FAV_KEY) === 'true'
+  } catch { return false }
+}
+
+function saveShowFavOnly(show: boolean) {
+  if (typeof window === 'undefined') return
+  localStorage.setItem(SHOW_FAV_KEY, String(show))
 }
 
 function loadHistory(): ClosedTrade[] {
@@ -171,6 +198,8 @@ export default function QuickScalpPage() {
   const [soundEnabled, setSoundEnabled] = useState(true)
   const [executingTrade, setExecutingTrade] = useState<string | null>(null)
   const [executedTrades, setExecutedTrades] = useState<Record<string, boolean>>({})
+  const [favorites, setFavorites] = useState<string[]>([])
+  const [showFavOnly, setShowFavOnly] = useState(false)
   const lastSignalsRef = useRef<Record<string, string>>({})
   const isFirstLoad = useRef(true)
 
@@ -178,15 +207,31 @@ export default function QuickScalpPage() {
   const wsSymbols = useMemo(() => SIGNAL_PAIRS, [])
   const { prices: livePrices, connected: wsConnected } = useBinanceWS(wsSymbols)
 
-  // Load trades + history from localStorage on mount + request notification permission
+  // Load trades + history + favorites from localStorage on mount
   useEffect(() => {
     setMyTrades(loadTrades())
     setTradeHistory(loadHistory())
+    setFavorites(loadFavorites())
+    setShowFavOnly(loadShowFavOnly())
     lastSignalsRef.current = loadLastSignals()
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission()
     }
   }, [])
+
+  const toggleFavorite = (symbol: string) => {
+    const updated = favorites.includes(symbol)
+      ? favorites.filter(f => f !== symbol)
+      : [...favorites, symbol]
+    setFavorites(updated)
+    saveFavorites(updated)
+  }
+
+  const toggleShowFavOnly = () => {
+    const newVal = !showFavOnly
+    setShowFavOnly(newVal)
+    saveShowFavOnly(newVal)
+  }
 
   // Update active trades with WebSocket live prices
   useEffect(() => {
@@ -216,7 +261,42 @@ export default function QuickScalpPage() {
     return myTrades.some((t) => t.symbol === symbol)
   }
 
-  const openTrade = (sig: QuickScalpSignal) => {
+  const openTrade = async (sig: QuickScalpSignal) => {
+    if (executingTrade) return
+    setExecutingTrade(sig.symbol)
+
+    // 1. Send to EA API (Supabase)
+    try {
+      const res = await fetch('/api/signals/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: sig.symbol, // BTCUSDT
+          action: sig.action === 'BUY' ? 'BUY' : 'SELL',
+          entry: sig.entry,
+          stopLoss: sig.stopLoss,
+          takeProfit: sig.target
+        })
+      })
+      const data = await res.json()
+      if (!data.success) {
+        console.error('EA Execution Failed:', data.error)
+        alert('فشل إرسال الأمر للـ EA: ' + data.error)
+        setExecutingTrade(null)
+        return
+      }
+      
+      // Success!
+      alert('تم إرسال الأمر للـ EA بنجاح! 🚀')
+      
+    } catch (e) {
+      console.error('Network Error:', e)
+      alert('خطأ في الاتصال بالخادم')
+      setExecutingTrade(null)
+      return
+    }
+
+    // 2. Save locally for UI tracking
     const livePrice = getLivePrice(sig.symbol, sig.price)
     const trade: MyTrade = {
       id: `trade-${sig.symbol}-${Date.now()}`,
@@ -233,6 +313,10 @@ export default function QuickScalpPage() {
     const updated = [trade, ...myTrades]
     setMyTrades(updated)
     saveTrades(updated)
+    
+    // Mark as executed in UI
+    setExecutedTrades(prev => ({ ...prev, [sig.id]: true }))
+    setExecutingTrade(null)
   }
 
   const closeTrade = (tradeId: string) => {
@@ -290,6 +374,9 @@ export default function QuickScalpPage() {
         if (!isFirstLoad.current && soundEnabled) {
           const prev = lastSignalsRef.current
           for (const sig of newSignals) {
+            // Skip alert if we are in "Fav Only" mode and this symbol is not a favorite
+            if (showFavOnly && !favorites.includes(sig.symbol)) continue
+
             const prevAction = prev[sig.symbol]
             if (sig.action === 'BUY' && prevAction !== 'BUY') {
               playAlertSound('buy')
@@ -315,7 +402,7 @@ export default function QuickScalpPage() {
       console.error(e)
     }
     setLoading(false)
-  }, [timeframe, soundEnabled])
+  }, [timeframe, soundEnabled, showFavOnly, favorites]) // Added dependencies
 
   useEffect(() => {
     setLoading(true)
@@ -324,10 +411,15 @@ export default function QuickScalpPage() {
     return () => window.clearInterval(timer)
   }, [fetchSignals])
 
-  const actionable = signals.filter((s) => s.action !== 'WAIT')
-  const buySignals = signals.filter((s) => s.action === 'BUY')
-  const sellSignals = signals.filter((s) => s.action === 'SELL')
-  const exitSignals = signals.filter((s) => s.action === 'EXIT_BUY' || s.action === 'EXIT_SELL')
+  // Apply favorites filter
+  const displayedSignals = showFavOnly
+    ? signals.filter(s => favorites.includes(s.symbol))
+    : signals
+
+  const actionable = displayedSignals.filter((s) => s.action !== 'WAIT')
+  const buySignals = displayedSignals.filter((s) => s.action === 'BUY')
+  const sellSignals = displayedSignals.filter((s) => s.action === 'SELL')
+  const exitSignals = displayedSignals.filter((s) => s.action === 'EXIT_BUY' || s.action === 'EXIT_SELL')
 
   const getMomentumText = (m: string) => {
     const map: Record<string, string> = {
@@ -372,6 +464,19 @@ export default function QuickScalpPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          <button
+            onClick={toggleShowFavOnly}
+            className={`px-3 py-2 rounded-xl text-sm font-medium transition-all flex items-center gap-2 ${
+              showFavOnly
+                ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
+                : 'bg-surface border border-white/10 text-neutral-400 hover:text-white'
+            }`}
+            title="إظهار المفضلة فقط"
+          >
+            <span>⭐</span>
+            <span className="hidden md:inline">{showFavOnly ? 'المفضلة فقط' : 'كل العملات'}</span>
+          </button>
+          
           <div className="flex gap-2">
             {timeframes.map((tf) => (
               <button
@@ -665,14 +770,16 @@ export default function QuickScalpPage() {
             <div key={i} className="card animate-pulse h-32" />
           ))}
         </div>
-      ) : signals.length === 0 ? (
+      ) : displayedSignals.length === 0 ? (
         <div className="card text-center py-20">
           <p className="text-neutral-400 text-lg">لا توجد بيانات حالياً</p>
-          <p className="text-neutral-500 text-sm mt-2">جاري الاتصال بـ Binance...</p>
+          <p className="text-neutral-500 text-sm mt-2">
+            {showFavOnly ? 'لم تختر أي عملات مفضلة، أو لا توجد إشارات لها' : 'جاري الاتصال بـ Binance...'}
+          </p>
         </div>
       ) : (
         <div className="space-y-3">
-          {signals.map((sig) => (
+          {displayedSignals.map((sig) => (
             <div
               key={sig.symbol}
               className={`card border ${getActionBg(sig.action)} transition-all`}
@@ -684,6 +791,21 @@ export default function QuickScalpPage() {
               >
                 {/* Left: Symbol + Action */}
                 <div className="flex items-center gap-4 flex-1">
+                  
+                  {/* Favorite Button */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      toggleFavorite(sig.symbol)
+                    }}
+                    className={`p-2 rounded-full transition-all hover:bg-white/5 ${
+                      favorites.includes(sig.symbol) ? 'text-yellow-400 scale-110' : 'text-neutral-600 hover:text-yellow-400'
+                    }`}
+                    title={favorites.includes(sig.symbol) ? 'إزالة من المفضلة' : 'إضافة للمفضلة'}
+                  >
+                    <span className="text-xl">{favorites.includes(sig.symbol) ? '★' : '☆'}</span>
+                  </button>
+
                   <div className="min-w-[120px]">
                     <div className="font-bold text-lg">{sig.displaySymbol}</div>
                     <div className="font-mono text-sm text-neutral-400">
@@ -875,7 +997,7 @@ export default function QuickScalpPage() {
                             e.stopPropagation()
                             setExecutingTrade(sig.symbol)
                             try {
-                              const res = await fetch('/api/signals/latest', {
+                              const res = await fetch('/api/signals/execute', { // Use the correct endpoint for execution
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({

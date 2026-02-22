@@ -4,13 +4,13 @@ import { join } from 'path'
 
 export async function GET() {
   try {
-    const filePath = join(process.cwd(), 'ea', 'TradeSignalsPro.mq5')
+    const filePath = join(process.cwd(), 'ea', 'AlQabas.mq5')
     const fileBuffer = readFileSync(filePath)
 
     return new NextResponse(fileBuffer, {
       headers: {
         'Content-Type': 'application/octet-stream',
-        'Content-Disposition': 'attachment; filename="TradeSignalsPro.mq5"',
+        'Content-Disposition': 'attachment; filename="AlQabas.mq5"',
       },
     })
   } catch {
