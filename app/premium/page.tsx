@@ -90,12 +90,12 @@ export default function PremiumPage() {
             <StepCard
               num="1"
               title="حمّل ملف الـ EA"
-              description="حمّل أحدث نسخة من ملف TradeSignalsPro.mq5"
+              description="حمّل أحدث نسخة من ملف AlQabas.mq5"
             >
               <a
                 href="/api/download/ea"
                 className="btn-primary text-sm !px-6 !py-2 inline-block mt-3 hover:scale-105 transition-transform"
-                download="TradeSignalsPro.mq5"
+                download="AlQabas.mq5"
               >
                 ⬇️ تحميل الملف (تحديث جديد)
               </a>
@@ -123,7 +123,7 @@ export default function PremiumPage() {
               description="خطوة مهمة لتشغيل الملف"
             >
               <div className="bg-black/40 rounded-lg p-3 mt-3 text-sm text-neutral-300 space-y-2">
-                <p>1. في MetaEditor، افتح ملف <strong>TradeSignalsPro.mq5</strong></p>
+                <p>1. في MetaEditor، افتح ملف <strong>AlQabas.mq5</strong></p>
                 <p>2. اضغط زر <strong>Compile</strong> في الأعلى (أو F7)</p>
                 <p>3. تأكد في الأسفل أنه مكتوب: <span className="text-green-400">0 errors</span></p>
               </div>
@@ -153,7 +153,7 @@ export default function PremiumPage() {
               description="الخطوة الأخيرة!"
             >
               <div className="bg-black/40 rounded-lg p-3 mt-3 text-sm text-neutral-300 space-y-2 mb-4">
-                <p>1. من قائمة Navigator (يسار الشاشة)، اسحب <strong>TradeSignalsPro</strong> إلى أي شارت (مثلاً BTCUSD)</p>
+                <p>1. من قائمة Navigator (يسار الشاشة)، اسحب <strong>AlQabas</strong> إلى أي شارت (مثلاً BTCUSD)</p>
                 <p>2. في نافذة الإعدادات (Inputs)، أدخل البيانات التالية:</p>
               </div>
               

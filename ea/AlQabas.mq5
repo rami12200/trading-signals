@@ -1,9 +1,9 @@
 //+------------------------------------------------------------------+
-//|                                            TradeSignalsPro.mq5   |
-//|                        Copyright 2026, TradeSignals Pro          |
+//|                                              AlQabas.mq5         |
+//|                        Copyright 2026, AlQabas Pro               |
 //|                             https://qabas.pro                    |
 //+------------------------------------------------------------------+
-#property copyright "TradeSignals Pro"
+#property copyright "AlQabas Pro"
 #property link      "https://qabas.pro"
 #property version   "1.02" // Updated version
 #property description "Auto-trading EA - Receives signals from TradeSignals Pro API"
