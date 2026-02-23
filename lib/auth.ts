@@ -19,6 +19,9 @@ export interface UserProfile {
   name: string
   plan: UserPlan
   api_key: string | null
+  auto_trade: boolean
+  auto_trade_min_confidence: number
+  auto_trade_timeframe: string
   created_at: string
 }
 
@@ -81,12 +84,15 @@ export async function getUserProfile(): Promise<UserProfile | null> {
 
   if (!data) {
     // Fallback: create profile if missing
-    const profile = {
+    const profile: UserProfile = {
       id: session.user.id,
       email: session.user.email || '',
       name: session.user.user_metadata?.name || '',
       plan: 'free' as UserPlan,
       api_key: null,
+      auto_trade: false,
+      auto_trade_min_confidence: 65,
+      auto_trade_timeframe: '15m',
       created_at: new Date().toISOString(),
     }
     await supabase.from('profiles').upsert(profile)

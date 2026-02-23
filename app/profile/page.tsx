@@ -35,11 +35,16 @@ function getActiveTradesCount(): number {
 
 export default function ProfilePage() {
   const router = useRouter()
-  const { user, loading: authLoading, signOut } = useAuth()
+  const { user, loading: authLoading, signOut, refreshProfile } = useAuth()
   const [history, setHistory] = useState<ClosedTrade[]>([])
   const [activeTrades, setActiveTrades] = useState(0)
   const [showApiKey, setShowApiKey] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [autoTrade, setAutoTrade] = useState(false)
+  const [minConfidence, setMinConfidence] = useState(65)
+  const [autoTimeframe, setAutoTimeframe] = useState('15m')
+  const [savingSettings, setSavingSettings] = useState(false)
+  const [settingsSaved, setSettingsSaved] = useState(false)
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -48,7 +53,42 @@ export default function ProfilePage() {
     }
     setHistory(getTradeHistory())
     setActiveTrades(getActiveTradesCount())
+    if (user) {
+      setAutoTrade(user.auto_trade ?? false)
+      setMinConfidence(user.auto_trade_min_confidence ?? 65)
+      setAutoTimeframe(user.auto_trade_timeframe ?? '15m')
+    }
   }, [user, authLoading, router])
+
+  const saveAutoTradeSettings = async (newAutoTrade: boolean, newMinConf: number, newTimeframe: string = autoTimeframe) => {
+    if (!user) return
+    setSavingSettings(true)
+    setSettingsSaved(false)
+    try {
+      const res = await fetch('/api/profile/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: user.id,
+          auto_trade: newAutoTrade,
+          auto_trade_min_confidence: newMinConf,
+          auto_trade_timeframe: newTimeframe,
+        }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setSettingsSaved(true)
+        setTimeout(() => setSettingsSaved(false), 3000)
+        await refreshProfile()
+      } else {
+        alert(data.error || 'فشل حفظ الإعدادات')
+      }
+    } catch {
+      alert('فشل الاتصال بالسيرفر')
+    } finally {
+      setSavingSettings(false)
+    }
+  }
 
   const logout = async () => {
     await signOut()
@@ -225,6 +265,111 @@ export default function ProfilePage() {
           <p className="text-xs text-neutral-500">
             استخدم هذا المفتاح في Expert Advisor على MT5. لا تشاركه مع أحد.
           </p>
+        </div>
+      )}
+
+      {/* Auto-Trade Settings — VIP Only */}
+      {user.plan === 'vip' && user.api_key && (
+        <div className="card mb-6 border-amber-500/20 bg-gradient-to-r from-amber-500/[0.03] to-orange-500/[0.03]">
+          <div className="flex items-center gap-2 mb-4">
+            <span className="text-lg">🤖</span>
+            <h3 className="font-bold">التنفيذ التلقائي — Auto Trade</h3>
+          </div>
+
+          <div className="space-y-4">
+            {/* Toggle */}
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium">تفعيل التنفيذ التلقائي</div>
+                <div className="text-[10px] text-neutral-500 mt-0.5">
+                  ينفّذ الصفقات تلقائياً عند ظهور توصية شراء أو بيع
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  const newVal = !autoTrade
+                  setAutoTrade(newVal)
+                  saveAutoTradeSettings(newVal, minConfidence)
+                }}
+                disabled={savingSettings}
+                className={`relative w-12 h-6 rounded-full transition-all ${
+                  autoTrade ? 'bg-bullish' : 'bg-neutral-700'
+                } ${savingSettings ? 'opacity-50' : ''}`}
+              >
+                <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${
+                  autoTrade ? 'right-0.5' : 'left-0.5'
+                }`} />
+              </button>
+            </div>
+
+            {/* Timeframe + Min Confidence */}
+            {autoTrade && (
+              <div className="bg-black/20 rounded-xl p-4 space-y-4">
+                {/* Timeframe Selection */}
+                <div className="flex items-center justify-between">
+                  <div className="text-sm">الإطار الزمني</div>
+                  <div className="flex gap-2">
+                    {[{ v: '5m', l: '5 دقائق' }, { v: '15m', l: '15 دقيقة' }].map((tf) => (
+                      <button
+                        key={tf.v}
+                        onClick={() => {
+                          setAutoTimeframe(tf.v)
+                          saveAutoTradeSettings(autoTrade, minConfidence, tf.v)
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                          autoTimeframe === tf.v
+                            ? 'bg-accent text-white shadow-lg shadow-accent/20'
+                            : 'bg-white/5 text-neutral-400 hover:bg-white/10'
+                        }`}
+                      >
+                        {tf.l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Min Confidence Slider */}
+                <div className="flex items-center justify-between">
+                  <div className="text-sm">الحد الأدنى للثقة</div>
+                  <span className={`text-sm font-bold font-mono ${
+                    minConfidence >= 70 ? 'text-bullish' :
+                    minConfidence >= 50 ? 'text-accent' : 'text-yellow-400'
+                  }`}>
+                    {minConfidence}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={30}
+                  max={95}
+                  step={5}
+                  value={minConfidence}
+                  onChange={(e) => setMinConfidence(Number(e.target.value))}
+                  onMouseUp={() => saveAutoTradeSettings(autoTrade, minConfidence)}
+                  onTouchEnd={() => saveAutoTradeSettings(autoTrade, minConfidence)}
+                  className="w-full accent-accent"
+                />
+                <div className="flex justify-between text-[9px] text-neutral-600">
+                  <span>30% — أكثر صفقات</span>
+                  <span>95% — أقل صفقات وأدق</span>
+                </div>
+              </div>
+            )}
+
+            {/* Status */}
+            {settingsSaved && (
+              <div className="text-xs text-bullish flex items-center gap-1">
+                ✅ تم حفظ الإعدادات
+              </div>
+            )}
+
+            {autoTrade && (
+              <div className="text-[10px] text-yellow-400/80 bg-yellow-500/5 rounded-lg px-3 py-2 border border-yellow-500/10">
+                ⚠️ <strong>مهم:</strong> لازم صفحة السكالبينج تكون مفتوحة + الـ EA شغال على MT5 عشان التنفيذ التلقائي يشتغل.
+                لا تغلق المتصفح.
+              </div>
+            )}
+          </div>
         </div>
       )}
 

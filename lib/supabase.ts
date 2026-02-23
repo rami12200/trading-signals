@@ -6,6 +6,8 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     storageKey: 'sb-qabas-auth',
+    persistSession: true,
+    autoRefreshToken: true,
     detectSessionInUrl: true,
     lock: async (name: string, acquireTimeout: number, fn: () => Promise<any>) => {
       return await fn()

@@ -208,6 +208,8 @@ export default function QuickScalpPage() {
   const [showFavOnly, setShowFavOnly] = useState(false)
   const lastSignalsRef = useRef<Record<string, string>>({})
   const isFirstLoad = useRef(true)
+  const autoTradeExecutedRef = useRef<Record<string, number>>({})
+  const [autoTradeLog, setAutoTradeLog] = useState<string[]>([])
 
   // WebSocket for live prices — stable reference to avoid reconnects
   const wsSymbols = useMemo(() => SIGNAL_PAIRS, [])
@@ -224,6 +226,13 @@ export default function QuickScalpPage() {
       Notification.requestPermission()
     }
   }, [])
+
+  // Sync timeframe from auto-trade settings
+  useEffect(() => {
+    if (user?.auto_trade && user?.auto_trade_timeframe) {
+      setTimeframe(user.auto_trade_timeframe)
+    }
+  }, [user?.auto_trade, user?.auto_trade_timeframe])
 
   const toggleFavorite = (symbol: string) => {
     const updated = favorites.includes(symbol)
@@ -363,7 +372,50 @@ export default function QuickScalpPage() {
             }
           }
         }
+        const wasFirstLoad = isFirstLoad.current
         isFirstLoad.current = false
+
+        // === AUTO-TRADE: Execute signals automatically if enabled ===
+        if (!wasFirstLoad && user?.auto_trade && user?.api_key && user?.plan === 'vip') {
+          const minConf = user.auto_trade_min_confidence ?? 65
+          const prev = lastSignalsRef.current
+          for (const sig of newSignals) {
+            // Only BUY or SELL
+            if (sig.action !== 'BUY' && sig.action !== 'SELL') continue
+            // Must be a NEW signal (action changed)
+            if (prev[sig.symbol] === sig.action) continue
+            // Must meet minimum confidence
+            if ((sig.confidence ?? 0) < minConf) continue
+            // Don't re-execute same signal within 5 minutes
+            const lastExec = autoTradeExecutedRef.current[sig.symbol]
+            if (lastExec && Date.now() - lastExec < 5 * 60 * 1000) continue
+            // Don't execute if already have active trade on this symbol
+            if (myTrades.some(t => t.symbol === sig.symbol)) continue
+
+            // Execute!
+            autoTradeExecutedRef.current[sig.symbol] = Date.now()
+            const time = new Date().toLocaleTimeString('ar-EG')
+            setAutoTradeLog(l => [`🤖 ${time} — ${sig.action === 'BUY' ? 'شراء' : 'بيع'} ${sig.displaySymbol} (${sig.confidence}%)`, ...l.slice(0, 9)])
+
+            fetch('/api/signals/execute', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                symbol: sig.symbol,
+                action: sig.action,
+                entry: sig.entry,
+                stopLoss: sig.stopLoss,
+                takeProfit: sig.target,
+                api_key: user.api_key,
+              }),
+            }).then(r => r.json()).then(data => {
+              if (data.success) {
+                saveTradLocally(sig)
+                sendNotification(`🤖 تنفيذ تلقائي: ${sig.action === 'BUY' ? 'شراء' : 'بيع'} ${sig.displaySymbol}`, `ثقة ${sig.confidence}%`)
+              }
+            }).catch(() => {})
+          }
+        }
 
         // Save current signals for next comparison
         const sigMap: Record<string, string> = {}
@@ -375,7 +427,7 @@ export default function QuickScalpPage() {
       console.error(e)
     }
     setLoading(false)
-  }, [timeframe, soundEnabled, showFavOnly, favorites]) // Added dependencies
+  }, [timeframe, soundEnabled, showFavOnly, favorites, user, myTrades]) // Added dependencies
 
   useEffect(() => {
     setLoading(true)
@@ -505,6 +557,31 @@ export default function QuickScalpPage() {
           </div>
         </div>
       </div>
+
+      {/* Auto-Trade Status Banner */}
+      {user?.auto_trade && user?.plan === 'vip' && (
+        <div className="card mb-6 border-amber-500/20 bg-gradient-to-r from-amber-500/[0.03] to-orange-500/[0.03]">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <span className="inline-block w-2 h-2 rounded-full bg-bullish animate-pulse" />
+              <span className="text-sm font-bold text-amber-400">🤖 التنفيذ التلقائي مفعّل</span>
+            </div>
+            <span className="text-[10px] text-neutral-500">
+              {user.auto_trade_timeframe === '5m' ? '5 دقائق' : '15 دقيقة'} · الحد الأدنى: {user.auto_trade_min_confidence ?? 65}% ثقة
+            </span>
+          </div>
+          {autoTradeLog.length > 0 && (
+            <div className="space-y-0.5 mt-2 max-h-24 overflow-y-auto">
+              {autoTradeLog.map((log, i) => (
+                <div key={i} className="text-[10px] text-neutral-400 font-mono">{log}</div>
+              ))}
+            </div>
+          )}
+          {autoTradeLog.length === 0 && (
+            <div className="text-[10px] text-neutral-500">في انتظار إشارات جديدة تحقق شروط الثقة...</div>
+          )}
+        </div>
+      )}
 
       {/* Price Disclaimer */}
       <div className="card mb-6 border-yellow-500/20 bg-yellow-500/[0.03]">
