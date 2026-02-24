@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "AlQabas Pro"
 #property link      "https://qabas.pro"
-#property version   "1.04"
+#property version   "1.05"
 #property description "AlQabas EA - Auto-detect broker symbols & execute trades"
 #property strict
 
@@ -375,6 +375,8 @@ void CheckOrderQueue()
       string symbol = GetJsonValue(response, "symbol");
       double sl = StringToDouble(GetJsonValue(response, "stopLoss"));
       double tp = StringToDouble(GetJsonValue(response, "takeProfit"));
+      double orderLot = StringToDouble(GetJsonValue(response, "lotSize"));
+      if(orderLot <= 0) orderLot = LotSize; // fallback to input LotSize
       
       if(orderId == "" || action == "") return;
       
@@ -397,11 +399,11 @@ void CheckOrderQueue()
       
       if(action == "BUY")
       {
-         executed = ExecuteTrade(tradeSymbol, ORDER_TYPE_BUY, sl, tp);
+         executed = ExecuteTrade(tradeSymbol, ORDER_TYPE_BUY, sl, tp, orderLot);
       }
       else if(action == "SELL")
       {
-         executed = ExecuteTrade(tradeSymbol, ORDER_TYPE_SELL, sl, tp);
+         executed = ExecuteTrade(tradeSymbol, ORDER_TYPE_SELL, sl, tp, orderLot);
       }
       
       if(executed)
@@ -437,7 +439,7 @@ void MarkOrderExecuted(string orderId)
 //+------------------------------------------------------------------+
 //| تنفيذ صفقة                                                       |
 //+------------------------------------------------------------------+
-bool ExecuteTrade(string symbol, ENUM_ORDER_TYPE type, double sl, double tp)
+bool ExecuteTrade(string symbol, ENUM_ORDER_TYPE type, double sl, double tp, double lot = 0)
 {
    // التحقق من عدم وجود صفقات مفتوحة كثيرة
    if(OrdersTotal() >= MaxTrades) 
@@ -458,9 +460,10 @@ bool ExecuteTrade(string symbol, ENUM_ORDER_TYPE type, double sl, double tp)
    ZeroMemory(request);
    ZeroMemory(result);
    
+   double tradeLot = (lot > 0) ? lot : LotSize;
    request.action = TRADE_ACTION_DEAL;
    request.symbol = symbol;
-   request.volume = LotSize;
+   request.volume = tradeLot;
    request.type = type;
    request.price = (type == ORDER_TYPE_BUY) ? SymbolInfoDouble(symbol, SYMBOL_ASK) : SymbolInfoDouble(symbol, SYMBOL_BID);
    request.sl = sl;

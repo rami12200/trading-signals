@@ -22,6 +22,7 @@ interface TradeOrder {
   entry: number
   stopLoss: number
   takeProfit: number
+  lotSize: number
   status: 'PENDING' | 'EXECUTED' | 'FAILED'
   createdAt: string
   executedAt?: string
@@ -67,7 +68,7 @@ async function validateApiKey(apiKey: string): Promise<boolean> {
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { symbol, action, entry, stopLoss, takeProfit, api_key } = body
+    const { symbol, action, entry, stopLoss, takeProfit, api_key, lotSize } = body
 
     if (!api_key) {
       return NextResponse.json(
@@ -108,6 +109,7 @@ export async function POST(request: Request) {
       entry: parseFloat(entry),
       stopLoss: parseFloat(stopLoss) || 0,
       takeProfit: parseFloat(takeProfit) || 0,
+      lotSize: parseFloat(lotSize) || 0,
       status: 'PENDING',
       createdAt: new Date().toISOString(),
     }
@@ -133,6 +135,7 @@ export async function POST(request: Request) {
         entry: order.entry,
         stopLoss: order.stopLoss,
         takeProfit: order.takeProfit,
+        lotSize: order.lotSize,
         status: order.status,
       },
     })

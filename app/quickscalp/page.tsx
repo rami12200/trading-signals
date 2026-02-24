@@ -212,22 +212,36 @@ export default function QuickScalpPage() {
   const autoTradeLastSignalsRef = useRef<Record<string, string>>({})
   const autoTradeFirstRun = useRef(true)
   const [autoTradeLog, setAutoTradeLog] = useState<string[]>([])
+  const [lotSizes, setLotSizes] = useState<Record<string, number>>({})
+  const [customLotInput, setCustomLotInput] = useState<Record<string, string>>({})
 
   // WebSocket for live prices — stable reference to avoid reconnects
   const wsSymbols = useMemo(() => SIGNAL_PAIRS, [])
   const { prices: livePrices, connected: wsConnected } = useBinanceWS(wsSymbols)
 
-  // Load trades + history + favorites from localStorage on mount
+  // Load trades + history + favorites + lot sizes from localStorage on mount
   useEffect(() => {
     setMyTrades(loadTrades())
     setTradeHistory(loadHistory())
     setFavorites(loadFavorites())
     setShowFavOnly(loadShowFavOnly())
     lastSignalsRef.current = loadLastSignals()
+    try {
+      const savedLots = localStorage.getItem('quickscalp_lot_sizes')
+      if (savedLots) setLotSizes(JSON.parse(savedLots))
+    } catch {}
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission()
     }
   }, [])
+
+  const setLotSize = (symbol: string, lot: number) => {
+    const updated = { ...lotSizes, [symbol]: lot }
+    setLotSizes(updated)
+    try { localStorage.setItem('quickscalp_lot_sizes', JSON.stringify(updated)) } catch {}
+  }
+
+  const getLotSize = (symbol: string) => lotSizes[symbol] || 0.1
 
   const toggleFavorite = (symbol: string) => {
     const updated = favorites.includes(symbol)
@@ -434,6 +448,7 @@ export default function QuickScalpPage() {
               entry: sig.entry,
               stopLoss: sig.stopLoss,
               takeProfit: sig.target,
+              lotSize: getLotSize(sig.symbol),
               api_key: user.api_key,
             }),
           }).then(r => r.json()).then(data => {
@@ -1077,68 +1092,112 @@ export default function QuickScalpPage() {
                     </div>
                   </div>
 
-                  {/* Trade Action Buttons */}
+                  {/* Lot Size Selector + Trade Action Buttons */}
                   {(sig.action === 'BUY' || sig.action === 'SELL') && (
-                    <div className="mt-4 flex flex-col sm:flex-row justify-center gap-3">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          openTrade(sig)
-                        }}
-                        className="px-6 py-3 rounded-xl font-bold text-sm bg-accent hover:bg-accent/80 text-white transition-all shadow-lg shadow-accent/20"
-                      >
-                        📋 دخلت الصفقة — احفظ البيانات
-                      </button>
-                      {executedTrades[sig.symbol] ? (
-                        <div className="px-6 py-3 rounded-xl font-bold text-sm text-center bg-bullish/20 text-bullish border border-bullish/30">
-                          ✅ تم إرسال الأمر لـ MT5
+                    <div className="mt-4 space-y-3">
+                      {/* Lot Size Selector */}
+                      <div className="bg-background/50 rounded-xl p-3">
+                        <div className="text-[10px] text-neutral-500 mb-2">حجم اللوت</div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {[0.01, 0.05, 0.1, 0.5, 1.0].map((lot) => (
+                            <button
+                              key={lot}
+                              onClick={(e) => { e.stopPropagation(); setLotSize(sig.symbol, lot); setCustomLotInput(p => ({ ...p, [sig.symbol]: '' })) }}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition-all ${
+                                getLotSize(sig.symbol) === lot && !customLotInput[sig.symbol]
+                                  ? 'bg-accent text-white shadow-lg shadow-accent/20'
+                                  : 'bg-white/5 text-neutral-400 hover:bg-white/10'
+                              }`}
+                            >
+                              {lot}
+                            </button>
+                          ))}
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0.01"
+                              placeholder="مخصص"
+                              value={customLotInput[sig.symbol] || ''}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => {
+                                const val = e.target.value
+                                setCustomLotInput(p => ({ ...p, [sig.symbol]: val }))
+                                const num = parseFloat(val)
+                                if (num > 0) setLotSize(sig.symbol, num)
+                              }}
+                              className="w-20 px-2 py-1.5 rounded-lg bg-white/5 border border-white/10 text-xs font-mono text-white text-center focus:border-accent/50 focus:outline-none"
+                            />
+                          </div>
+                          <span className="text-[10px] text-neutral-600 mr-auto">
+                            الحالي: <span className="text-accent font-bold font-mono">{getLotSize(sig.symbol)}</span>
+                          </span>
                         </div>
-                      ) : (
+                      </div>
+
+                      {/* Buttons */}
+                      <div className="flex flex-col sm:flex-row justify-center gap-3">
                         <button
-                          onClick={async (e) => {
+                          onClick={(e) => {
                             e.stopPropagation()
-                            setExecutingTrade(sig.symbol)
-                            try {
-                              const res = await fetch('/api/signals/execute', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                  symbol: sig.symbol,
-                                  action: sig.action,
-                                  entry: sig.entry,
-                                  stopLoss: sig.stopLoss,
-                                  takeProfit: sig.target,
-                                  api_key: user?.api_key,
-                                }),
-                              })
-                              const data = await res.json()
-                              if (data.success) {
-                                setExecutedTrades((prev) => ({ ...prev, [sig.symbol]: true }))
-                                setTimeout(() => setExecutedTrades((prev) => ({ ...prev, [sig.symbol]: false })), 10000)
-                                saveTradLocally(sig)
-                              } else {
-                                alert('فشل إرسال الأمر: ' + (data.error || 'خطأ غير معروف'))
-                              }
-                            } catch {
-                              alert('فشل الاتصال بالسيرفر')
-                            } finally {
-                              setExecutingTrade(null)
-                            }
+                            openTrade(sig)
                           }}
-                          disabled={executingTrade === sig.symbol}
-                          className={`px-6 py-3 rounded-xl font-bold text-sm text-center transition-all ${
-                            sig.action === 'BUY'
-                              ? 'bg-bullish/20 hover:bg-bullish/30 text-bullish border border-bullish/30'
-                              : 'bg-bearish/20 hover:bg-bearish/30 text-bearish border border-bearish/30'
-                          } ${executingTrade === sig.symbol ? 'opacity-50 cursor-wait' : ''}`}
+                          className="px-6 py-3 rounded-xl font-bold text-sm bg-accent hover:bg-accent/80 text-white transition-all shadow-lg shadow-accent/20"
                         >
-                          {executingTrade === sig.symbol
-                            ? '⏳ جاري الإرسال...'
-                            : sig.action === 'BUY'
-                              ? '🟢 نفّذ شراء على MT5'
-                              : '🔴 نفّذ بيع على MT5'}
+                          📋 دخلت الصفقة — احفظ البيانات
                         </button>
-                      )}
+                        {executedTrades[sig.symbol] ? (
+                          <div className="px-6 py-3 rounded-xl font-bold text-sm text-center bg-bullish/20 text-bullish border border-bullish/30">
+                            ✅ تم إرسال الأمر لـ MT5
+                          </div>
+                        ) : (
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation()
+                              setExecutingTrade(sig.symbol)
+                              try {
+                                const res = await fetch('/api/signals/execute', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({
+                                    symbol: sig.symbol,
+                                    action: sig.action,
+                                    entry: sig.entry,
+                                    stopLoss: sig.stopLoss,
+                                    takeProfit: sig.target,
+                                    lotSize: getLotSize(sig.symbol),
+                                    api_key: user?.api_key,
+                                  }),
+                                })
+                                const data = await res.json()
+                                if (data.success) {
+                                  setExecutedTrades((prev) => ({ ...prev, [sig.symbol]: true }))
+                                  setTimeout(() => setExecutedTrades((prev) => ({ ...prev, [sig.symbol]: false })), 10000)
+                                  saveTradLocally(sig)
+                                } else {
+                                  alert('فشل إرسال الأمر: ' + (data.error || 'خطأ غير معروف'))
+                                }
+                              } catch {
+                                alert('فشل الاتصال بالسيرفر')
+                              } finally {
+                                setExecutingTrade(null)
+                              }
+                            }}
+                            disabled={executingTrade === sig.symbol}
+                            className={`px-6 py-3 rounded-xl font-bold text-sm text-center transition-all ${
+                              sig.action === 'BUY'
+                                ? 'bg-bullish/20 hover:bg-bullish/30 text-bullish border border-bullish/30'
+                                : 'bg-bearish/20 hover:bg-bearish/30 text-bearish border border-bearish/30'
+                            } ${executingTrade === sig.symbol ? 'opacity-50 cursor-wait' : ''}`}
+                          >
+                            {executingTrade === sig.symbol
+                              ? '⏳ جاري الإرسال...'
+                              : sig.action === 'BUY'
+                                ? `🟢 نفّذ شراء على MT5 (${getLotSize(sig.symbol)} لوت)`
+                                : `🔴 نفّذ بيع على MT5 (${getLotSize(sig.symbol)} لوت)`}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
