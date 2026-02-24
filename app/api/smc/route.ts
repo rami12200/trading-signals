@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getKlines, SIGNAL_PAIRS, formatSymbol } from '@/lib/binance'
-import { parseKlines, calcEMA, analyzeVolume, OHLCV } from '@/lib/indicators'
+import { parseKlines, calcEMA, calcATR, calcBollingerBands, analyzeVolume, OHLCV } from '@/lib/indicators'
 
 // ============================================
 // SMC / Liquidity Sweep Strategy API
@@ -59,6 +59,7 @@ interface SMCSignal {
   price: number
   action: SMCAction
   actionText: string
+  mode: 'scalp' | 'sweep'
   reason: string
   reasons: string[]
   entry: number
@@ -76,6 +77,8 @@ interface SMCSignal {
     pdlBreak: boolean
     nySession: boolean
     hasTrigger: boolean
+    quietMarket: boolean
+    inRange: boolean
   }
   // Liquidity
   liquidity: {
@@ -97,6 +100,13 @@ interface SMCSignal {
     followThrough: boolean
     volumeSlowdown: boolean
   }
+  // Pullback (scalp mode)
+  pullback: {
+    detected: boolean
+    depth: number       // how far price retraced (0-100%)
+    intact: boolean     // swing high/low not broken
+    direction: 'UP' | 'DOWN' | 'NONE'
+  }
   // Structure
   structure: {
     dailyRange: number
@@ -106,6 +116,7 @@ interface SMCSignal {
     pdl: number
     asianHigh: number
     asianLow: number
+    atr: number
   }
   confidence: number
   confidenceLabel: string
@@ -293,7 +304,344 @@ function detectExhaustion(candles: OHLCV[], direction: 'UP' | 'DOWN'): { detecte
 }
 
 // ============================================
-// Main SMC Analysis Function
+// Helper: Detect Pullback after displacement
+// ============================================
+function detectPullback(candles: OHLCV[], dispDirection: 'UP' | 'DOWN' | 'NONE'): { detected: boolean; depth: number; intact: boolean; direction: 'UP' | 'DOWN' | 'NONE' } {
+  if (candles.length < 10 || dispDirection === 'NONE') return { detected: false, depth: 0, intact: false, direction: 'NONE' }
+
+  // Find the displacement move (last 3-7 candles back)
+  const recent = candles.slice(-8)
+  let swingHigh = -Infinity
+  let swingLow = Infinity
+  let dispEndIdx = -1
+
+  // Find the displacement's extreme
+  for (let i = 0; i < 5; i++) {
+    const c = recent[i]
+    if (dispDirection === 'UP' && c.high > swingHigh) { swingHigh = c.high; dispEndIdx = i }
+    if (dispDirection === 'DOWN' && c.low < swingLow) { swingLow = c.low; dispEndIdx = i }
+  }
+
+  if (dispEndIdx < 0) return { detected: false, depth: 0, intact: false, direction: dispDirection }
+
+  // Measure pullback from the extreme
+  const lastCandle = recent[recent.length - 1]
+  const prevCandle = recent[recent.length - 2]
+
+  if (dispDirection === 'UP') {
+    // After upward displacement, price should pull back down slightly
+    const dispStart = Math.min(...recent.slice(0, dispEndIdx + 1).map(c => c.low))
+    const dispRange = swingHigh - dispStart
+    if (dispRange <= 0) return { detected: false, depth: 0, intact: false, direction: dispDirection }
+
+    const retracement = swingHigh - lastCandle.low
+    const depth = (retracement / dispRange) * 100
+    const intact = lastCandle.low > dispStart // hasn't broken the swing low
+    const pullbackHappening = lastCandle.close < swingHigh && depth >= 20 && depth <= 65
+    const resuming = lastCandle.close > prevCandle.close // starting to go back up
+
+    return {
+      detected: pullbackHappening && intact && resuming,
+      depth,
+      intact,
+      direction: 'UP',
+    }
+  } else {
+    // After downward displacement, price should pull back up slightly
+    const dispStart = Math.max(...recent.slice(0, dispEndIdx + 1).map(c => c.high))
+    const dispRange = dispStart - swingLow
+    if (dispRange <= 0) return { detected: false, depth: 0, intact: false, direction: dispDirection }
+
+    const retracement = lastCandle.high - swingLow
+    const depth = (retracement / dispRange) * 100
+    const intact = lastCandle.high < dispStart // hasn't broken the swing high
+    const pullbackHappening = lastCandle.close > swingLow && depth >= 20 && depth <= 65
+    const resuming = lastCandle.close < prevCandle.close // starting to go back down
+
+    return {
+      detected: pullbackHappening && intact && resuming,
+      depth,
+      intact,
+      direction: 'DOWN',
+    }
+  }
+}
+
+// ============================================
+// Helper: Check if market is quiet (for scalp mode)
+// ============================================
+function isQuietMarket(candles: OHLCV[], volumes: number[]): { quiet: boolean; atrRatio: number; volRatio: number } {
+  const atr = calcATR(candles, 14)
+  const atr50 = calcATR(candles.slice(0, -14), 14) // older ATR for comparison
+  const vol = analyzeVolume(volumes, 20)
+
+  const atrRatio = (atr && atr50 && atr50 > 0) ? atr / atr50 : 1
+  const quiet = atrRatio < 0.85 && vol.ratio < 1.2
+
+  return { quiet, atrRatio, volRatio: vol.ratio }
+}
+
+// ============================================
+// Helper: Check if price is in a range (BB squeeze)
+// ============================================
+function isInRange(candles: OHLCV[]): boolean {
+  const closes = candles.map(c => c.close)
+  const bb = calcBollingerBands(closes, 20, 2)
+  if (!bb) return false
+  const bbWidth = (bb.upper - bb.lower) / bb.middle * 100
+  return bbWidth < 2.5 // narrow bands = ranging
+}
+
+// ============================================
+// Scalp Analysis Function — Quick pullback entries
+// ============================================
+async function analyzeScalp(
+  candles: OHLCV[],
+  symbol: string,
+  dailyCandles: OHLCV[],
+  weeklyCandles: OHLCV[]
+): Promise<SMCSignal | null> {
+  if (candles.length < 50) return null
+
+  const currentPrice = candles[candles.length - 1].close
+  const closes = candles.map(c => c.close)
+  const volumes = candles.map(c => c.volume)
+  const atr = calcATR(candles, 14) || 0
+
+  // Structure
+  const { pdh, pdl } = getPDHL(dailyCandles)
+  const { asianHigh, asianLow } = getAsianHL(candles)
+  const todayCandles = candles.slice(-96)
+  const vwap = calcVWAP(todayCandles)
+  const dailyRange = pdh > 0 ? pdh - pdl : 0
+  const dailyRangePct = pdh > 0 ? (dailyRange / pdh) * 100 : 0
+
+  // Pre-trade filters for scalp
+  const vol = analyzeVolume(volumes, 20)
+  const quietCheck = isQuietMarket(candles, volumes)
+  const inRange = isInRange(candles)
+  const volumeSpike = vol.ratio >= 1.5
+  const nySession = isNYSessionOpen()
+
+  // Scalp requires quiet/ranging market — no chaos
+  const quietMarket = quietCheck.quiet || inRange
+  if (!quietMarket) {
+    // Build WAIT signal
+    const weeklyHigh = weeklyCandles.length >= 2 ? weeklyCandles[weeklyCandles.length - 2].high : 0
+    const weeklyLow = weeklyCandles.length >= 2 ? weeklyCandles[weeklyCandles.length - 2].low : 0
+    return buildWaitSignal(symbol, currentPrice, 'scalp', 'السوق غير هادئ — لا سكالب الآن', [
+      '❌ ATR مرتفع — حركة قوية',
+      `📊 نسبة ATR: ${(quietCheck.atrRatio * 100).toFixed(0)}%`,
+      `📊 نسبة فوليوم: ${(quietCheck.volRatio * 100).toFixed(0)}%`,
+      '⏳ انتظر حتى يهدأ السوق',
+    ], { pdh, pdl, asianHigh, asianLow, dailyRange, dailyRangePct, vwap, atr }, vol, volumeSpike, nySession, quietMarket, inRange)
+  }
+
+  // Displacement detection
+  const disp = detectDisplacement(candles)
+  if (!disp.detected) {
+    const weeklyHigh = weeklyCandles.length >= 2 ? weeklyCandles[weeklyCandles.length - 2].high : 0
+    const weeklyLow = weeklyCandles.length >= 2 ? weeklyCandles[weeklyCandles.length - 2].low : 0
+    return buildWaitSignal(symbol, currentPrice, 'scalp', 'لا يوجد اندفاع — انتظر حركة قوية', [
+      '❌ لا توجد 3 شموع قوية متتالية',
+      '⏳ انتظر اندفاع واضح ثم تصحيح',
+    ], { pdh, pdl, asianHigh, asianLow, dailyRange, dailyRangePct, vwap, atr }, vol, volumeSpike, nySession, quietMarket, inRange)
+  }
+
+  // Pullback detection
+  const pullback = detectPullback(candles, disp.direction)
+
+  if (!pullback.detected) {
+    const weeklyHigh = weeklyCandles.length >= 2 ? weeklyCandles[weeklyCandles.length - 2].high : 0
+    const weeklyLow = weeklyCandles.length >= 2 ? weeklyCandles[weeklyCandles.length - 2].low : 0
+    return buildWaitSignal(symbol, currentPrice, 'scalp',
+      disp.direction === 'UP' ? 'اندفاع صاعد — انتظر تصحيح' : 'اندفاع هابط — انتظر تصحيح',
+      [
+        `✅ اندفاع ${disp.direction === 'UP' ? 'صاعد' : 'هابط'} (${disp.strength} شموع)`,
+        pullback.depth > 0 ? `📐 تصحيح حالي: ${pullback.depth.toFixed(0)}%` : '⏳ انتظر بداية التصحيح',
+        !pullback.intact ? '❌ كسر مستوى — التصحيح عميق جداً' : pullback.depth > 0 ? '✅ المستوى سليم' : '',
+      ].filter(Boolean),
+      { pdh, pdl, asianHigh, asianLow, dailyRange, dailyRangePct, vwap, atr }, vol, volumeSpike, nySession, quietMarket, inRange)
+  }
+
+  // === ENTRY ===
+  let action: SMCAction = 'WAIT'
+  let reason = ''
+  const reasons: string[] = []
+  const cancelReasons: string[] = []
+
+  const lastCandle = candles[candles.length - 1]
+  const prevCandle = candles[candles.length - 2]
+  const lastBullish = lastCandle.close > lastCandle.open
+  const lastBearish = lastCandle.close < lastCandle.open
+  const lastBody = Math.abs(lastCandle.close - lastCandle.open)
+
+  if (disp.direction === 'UP' && pullback.detected && lastBullish) {
+    action = 'BUY'
+    reason = 'اندفاع صاعد + تصحيح خفيف + استئناف ← شراء سريع'
+    reasons.push(`✅ اندفاع صاعد (${disp.strength} شموع قوية)`)
+    reasons.push(`📐 تصحيح ${pullback.depth.toFixed(0)}% — مستوى سليم`)
+    reasons.push('✅ شمعة صاعدة تؤكد الاستئناف')
+    reasons.push('🎯 هدف سريع — 1x ATR')
+  } else if (disp.direction === 'DOWN' && pullback.detected && lastBearish) {
+    action = 'SELL'
+    reason = 'اندفاع هابط + تصحيح خفيف + استئناف ← بيع سريع'
+    reasons.push(`✅ اندفاع هابط (${disp.strength} شموع قوية)`)
+    reasons.push(`📐 تصحيح ${pullback.depth.toFixed(0)}% — مستوى سليم`)
+    reasons.push('✅ شمعة هابطة تؤكد الاستئناف')
+    reasons.push('🎯 هدف سريع — 1x ATR')
+  }
+
+  // Cancellation
+  if (action !== 'WAIT') {
+    const prevBody2 = Math.abs(prevCandle.close - prevCandle.open)
+    if (action === 'BUY' && lastBearish && lastBody > prevBody2 * 1.5) cancelReasons.push('⚠️ شمعة ابتلاع هابطة')
+    if (action === 'SELL' && lastBullish && lastBody > prevBody2 * 1.5) cancelReasons.push('⚠️ شمعة ابتلاع صاعدة')
+  }
+
+  // SL/TP — scalp is tight
+  let entry = currentPrice
+  let stopLoss: number
+  let target1: number
+
+  if (action === 'BUY') {
+    // SL below recent swing low
+    const recentLow = Math.min(...candles.slice(-5).map(c => c.low))
+    stopLoss = recentLow - atr * 0.15
+    target1 = currentPrice + atr * 1.0 // 1x ATR target
+  } else if (action === 'SELL') {
+    const recentHigh = Math.max(...candles.slice(-5).map(c => c.high))
+    stopLoss = recentHigh + atr * 0.15
+    target1 = currentPrice - atr * 1.0
+  } else {
+    stopLoss = currentPrice - atr * 0.5
+    target1 = currentPrice + atr * 1.0
+  }
+
+  const target2 = action === 'BUY' ? target1 + atr * 0.5 : action === 'SELL' ? target1 - atr * 0.5 : target1
+
+  const risk = Math.abs(currentPrice - stopLoss)
+  const profit = Math.abs(target1 - currentPrice)
+  const rr = risk > 0 ? (profit / risk).toFixed(1) : '0'
+
+  // Confidence
+  let confidence = 0
+  if (action !== 'WAIT') {
+    confidence = 50
+    if (disp.strength >= 4) confidence += 10
+    if (pullback.depth >= 30 && pullback.depth <= 55) confidence += 10 // ideal pullback
+    if (pullback.intact) confidence += 5
+    if (quietMarket) confidence += 8
+    if (inRange) confidence += 5
+    confidence -= cancelReasons.length * 10
+    confidence = Math.max(10, Math.min(95, confidence))
+  }
+
+  let confidenceLabel = ''
+  if (confidence >= 80) confidenceLabel = 'ثقة عالية جداً'
+  else if (confidence >= 65) confidenceLabel = 'ثقة عالية'
+  else if (confidence >= 50) confidenceLabel = 'ثقة متوسطة'
+  else if (confidence >= 35) confidenceLabel = 'ثقة منخفضة'
+  else confidenceLabel = action === 'WAIT' ? '' : 'ثقة ضعيفة'
+
+  const actionTextMap: Record<SMCAction, string> = {
+    BUY: '🟢 شراء سريع — Pullback',
+    SELL: '🔴 بيع سريع — Pullback',
+    WAIT: '⏳ لا يوجد فرصة سكالب',
+  }
+
+  return {
+    id: `scalp-${symbol}-${Date.now()}`,
+    symbol,
+    displaySymbol: formatSymbol(symbol),
+    price: currentPrice,
+    action,
+    actionText: actionTextMap[action],
+    mode: 'scalp',
+    reason,
+    reasons: reasons.slice(0, 6),
+    entry,
+    stopLoss,
+    target1,
+    target2,
+    profitPct: ((profit / currentPrice) * 100).toFixed(3),
+    riskPct: ((risk / currentPrice) * 100).toFixed(3),
+    riskReward: rr,
+    filters: {
+      volumeSpike,
+      volumeRatio: vol.ratio,
+      pdhBreak: false,
+      pdlBreak: false,
+      nySession,
+      hasTrigger: disp.detected,
+      quietMarket,
+      inRange,
+    },
+    liquidity: { levels: [], sweptLevel: null, atLiquidity: false },
+    displacement: {
+      detected: disp.detected,
+      direction: disp.direction,
+      strength: disp.strength,
+      avgBodyRatio: disp.avgBodyRatio,
+    },
+    exhaustion: { detected: false, wickRatio: 0, followThrough: false, volumeSlowdown: false },
+    pullback: {
+      detected: pullback.detected,
+      depth: pullback.depth,
+      intact: pullback.intact,
+      direction: pullback.direction,
+    },
+    structure: { dailyRange, dailyRangePct, vwap, pdh, pdl, asianHigh, asianLow, atr },
+    confidence,
+    confidenceLabel,
+    signalSince: '',
+    signalAgeSeconds: 0,
+    cancelReasons,
+    timestamp: new Date().toISOString(),
+  }
+}
+
+// Helper to build a WAIT signal
+function buildWaitSignal(
+  symbol: string, currentPrice: number, mode: 'scalp' | 'sweep',
+  reason: string, reasons: string[],
+  structure: { pdh: number; pdl: number; asianHigh: number; asianLow: number; dailyRange: number; dailyRangePct: number; vwap: number; atr: number },
+  vol: { ratio: number; spike: boolean }, volumeSpike: boolean, nySession: boolean, quietMarket: boolean, inRange: boolean,
+): SMCSignal {
+  return {
+    id: `${mode}-${symbol}-${Date.now()}`,
+    symbol,
+    displaySymbol: formatSymbol(symbol),
+    price: currentPrice,
+    action: 'WAIT',
+    actionText: mode === 'scalp' ? '⏳ لا يوجد فرصة سكالب' : '⏳ لا يوجد فرصة الآن',
+    mode,
+    reason,
+    reasons: reasons.slice(0, 6),
+    entry: currentPrice,
+    stopLoss: currentPrice,
+    target1: currentPrice,
+    target2: currentPrice,
+    profitPct: '0',
+    riskPct: '0',
+    riskReward: '0',
+    filters: { volumeSpike, volumeRatio: vol.ratio, pdhBreak: false, pdlBreak: false, nySession, hasTrigger: false, quietMarket, inRange },
+    liquidity: { levels: [], sweptLevel: null, atLiquidity: false },
+    displacement: { detected: false, direction: 'NONE', strength: 0, avgBodyRatio: 0 },
+    exhaustion: { detected: false, wickRatio: 0, followThrough: false, volumeSlowdown: false },
+    pullback: { detected: false, depth: 0, intact: false, direction: 'NONE' },
+    structure,
+    confidence: 0,
+    confidenceLabel: '',
+    signalSince: '',
+    signalAgeSeconds: 0,
+    cancelReasons: [],
+    timestamp: new Date().toISOString(),
+  }
+}
+
+// ============================================
+// Main SMC Sweep Analysis Function
 // ============================================
 async function analyzeSMC(
   candles: OHLCV[],
@@ -634,6 +982,7 @@ async function analyzeSMC(
     price: currentPrice,
     action,
     actionText: actionTextMap[action],
+    mode: 'sweep',
     reason,
     reasons: reasons.slice(0, 6),
     entry,
@@ -650,6 +999,8 @@ async function analyzeSMC(
       pdlBreak,
       nySession,
       hasTrigger,
+      quietMarket: false,
+      inRange: false,
     },
     liquidity: {
       levels: levels.slice(0, 8),
@@ -668,6 +1019,7 @@ async function analyzeSMC(
       followThrough: exhaust.followThrough,
       volumeSlowdown: exhaust.volumeSlowdown,
     },
+    pullback: { detected: false, depth: 0, intact: false, direction: 'NONE' as const },
     structure: {
       dailyRange,
       dailyRangePct,
@@ -676,6 +1028,7 @@ async function analyzeSMC(
       pdl,
       asianHigh,
       asianLow,
+      atr: calcATR(candles, 14) || 0,
     },
     confidence,
     confidenceLabel,
@@ -699,6 +1052,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
     const interval = searchParams.get('interval') || '15m'
     const symbolParam = searchParams.get('symbol')
+    const mode = (searchParams.get('mode') || 'sweep') as 'scalp' | 'sweep'
     const symbols = symbolParam ? [symbolParam] : SIGNAL_PAIRS
 
     const signals: SMCSignal[] = []
@@ -718,7 +1072,9 @@ export async function GET(request: Request) {
         const rawWeekly = await getCachedKlines(symbol, '1w', 4)
         const weeklyCandles = parseKlines(rawWeekly)
 
-        return analyzeSMC(candles, symbol, dailyCandles, weeklyCandles)
+        return mode === 'scalp'
+          ? analyzeScalp(candles, symbol, dailyCandles, weeklyCandles)
+          : analyzeSMC(candles, symbol, dailyCandles, weeklyCandles)
       } catch {
         return null
       }
@@ -729,8 +1085,8 @@ export async function GET(request: Request) {
 
     for (const r of results) {
       if (r) {
-        // Signal age tracking
-        const key = r.symbol
+        // Signal age tracking (mode-specific)
+        const key = `${mode}-${r.symbol}`
         const tracked = signalTracker[key]
         if (!tracked || tracked.action !== r.action) {
           signalTracker[key] = { action: r.action, since: now.toISOString() }
@@ -770,6 +1126,7 @@ export async function GET(request: Request) {
       data: {
         signals,
         interval,
+        mode,
         count: signals.length,
         actionable: signals.filter(s => s.action !== 'WAIT').length,
         timestamp: new Date().toISOString(),

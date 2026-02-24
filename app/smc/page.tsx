@@ -20,6 +20,7 @@ interface SMCSignal {
   price: number
   action: 'BUY' | 'SELL' | 'WAIT'
   actionText: string
+  mode: 'scalp' | 'sweep'
   reason: string
   reasons: string[]
   entry: number
@@ -36,6 +37,8 @@ interface SMCSignal {
     pdlBreak: boolean
     nySession: boolean
     hasTrigger: boolean
+    quietMarket: boolean
+    inRange: boolean
   }
   liquidity: {
     levels: LiquidityLevel[]
@@ -54,6 +57,12 @@ interface SMCSignal {
     followThrough: boolean
     volumeSlowdown: boolean
   }
+  pullback: {
+    detected: boolean
+    depth: number
+    intact: boolean
+    direction: 'UP' | 'DOWN' | 'NONE'
+  }
   structure: {
     dailyRange: number
     dailyRangePct: number
@@ -62,6 +71,7 @@ interface SMCSignal {
     pdl: number
     asianHigh: number
     asianLow: number
+    atr: number
   }
   confidence: number
   confidenceLabel: string
@@ -74,8 +84,10 @@ interface SMCSignal {
 export default function SMCPage() {
   const { user } = useAuth()
   const [signals, setSignals] = useState<SMCSignal[]>([])
+  const [mode, setMode] = useState<'scalp' | 'sweep'>('scalp')
   const [timeframe, setTimeframe] = useState('15m')
   const [loading, setLoading] = useState(true)
+  const [sessionLosses, setSessionLosses] = useState(0)
   const [lastUpdate, setLastUpdate] = useState('')
   const [showDetails, setShowDetails] = useState<string | null>(null)
   const [soundEnabled, setSoundEnabled] = useState(true)
@@ -93,6 +105,8 @@ export default function SMCPage() {
     try {
       const savedLots = localStorage.getItem('smc_lot_sizes')
       if (savedLots) setLotSizes(JSON.parse(savedLots))
+      const savedLosses = localStorage.getItem('smc_session_losses')
+      if (savedLosses) setSessionLosses(parseInt(savedLosses) || 0)
     } catch {}
   }, [])
 
@@ -112,7 +126,7 @@ export default function SMCPage() {
 
   const fetchSignals = async () => {
     try {
-      const res = await fetch(`/api/smc?interval=${timeframe}`)
+      const res = await fetch(`/api/smc?interval=${timeframe}&mode=${mode}`)
       const data = await res.json()
       if (data.success) {
         setSignals(data.data.signals)
@@ -148,7 +162,7 @@ export default function SMCPage() {
     fetchSignals()
     const interval = setInterval(fetchSignals, 15000)
     return () => clearInterval(interval)
-  }, [timeframe, soundEnabled])
+  }, [timeframe, mode, soundEnabled])
 
   const actionable = signals.filter(s => s.action !== 'WAIT')
   const waiting = signals.filter(s => s.action === 'WAIT')
@@ -160,10 +174,10 @@ export default function SMCPage() {
         <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 mb-8">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
-              🏦 Smart Money — سحب السيولة
+              🏦 Smart Money
             </h1>
             <p className="text-sm text-neutral-400 mt-1">
-              نظام Liquidity Sweep — الدخول فقط بعد سرقة السيولة
+              {mode === 'scalp' ? 'سكالب سريع — اندفاع + تصحيح + استئناف' : 'سحب سيولة — Sweep → فشل → ارتداد'}
             </p>
           </div>
 
@@ -203,6 +217,49 @@ export default function SMCPage() {
           </div>
         </div>
 
+        {/* Mode Tabs */}
+        <div className="flex gap-2 mb-6">
+          <button
+            onClick={() => { setMode('scalp'); setLoading(true); setShowDetails(null) }}
+            className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${
+              mode === 'scalp'
+                ? 'bg-accent/20 text-accent border-2 border-accent/40'
+                : 'bg-surface/50 text-neutral-400 border-2 border-transparent hover:border-white/10'
+            }`}
+          >
+            ⚡ السريع (Scalp)
+            <div className="text-[10px] font-normal mt-0.5 opacity-70">
+              اندفاع + تصحيح + دخول مع الاتجاه
+            </div>
+          </button>
+          <button
+            onClick={() => { setMode('sweep'); setLoading(true); setShowDetails(null) }}
+            className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all ${
+              mode === 'sweep'
+                ? 'bg-red-500/20 text-red-400 border-2 border-red-500/40'
+                : 'bg-surface/50 text-neutral-400 border-2 border-transparent hover:border-white/10'
+            }`}
+          >
+            🔴 السيولة (Sweep)
+            <div className="text-[10px] font-normal mt-0.5 opacity-70">
+              سحب سيولة + فشل + ارتداد معاكس
+            </div>
+          </button>
+        </div>
+
+        {/* Session Loss Warning */}
+        {sessionLosses >= 2 && (
+          <div className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-center">
+            <div className="text-sm font-bold text-red-400">⛔ خسارتين متتاليتين — توقف بقية الجلسة</div>
+            <button
+              onClick={() => setSessionLosses(0)}
+              className="mt-2 text-xs text-neutral-400 underline hover:text-white"
+            >
+              إعادة تعيين العدّاد
+            </button>
+          </div>
+        )}
+
         {/* Stats Bar */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
           <div className="card bg-surface/50 text-center py-3">
@@ -213,25 +270,44 @@ export default function SMCPage() {
             <div className="text-2xl font-bold text-bullish">{actionable.length}</div>
             <div className="text-[10px] text-neutral-500">فرص متاحة</div>
           </div>
-          <div className="card bg-surface/50 text-center py-3">
-            <div className="text-2xl font-bold text-yellow-400">
-              {signals.filter(s => s.filters.hasTrigger).length}
-            </div>
-            <div className="text-[10px] text-neutral-500">محفّزات نشطة</div>
-          </div>
-          <div className="card bg-surface/50 text-center py-3">
-            <div className="text-2xl font-bold text-neutral-300">
-              {signals.filter(s => s.liquidity.sweptLevel).length}
-            </div>
-            <div className="text-[10px] text-neutral-500">Sweeps مكتشفة</div>
-          </div>
+          {mode === 'scalp' ? (
+            <>
+              <div className="card bg-surface/50 text-center py-3">
+                <div className="text-2xl font-bold text-yellow-400">
+                  {signals.filter(s => s.filters.quietMarket).length}
+                </div>
+                <div className="text-[10px] text-neutral-500">سوق هادئ</div>
+              </div>
+              <div className="card bg-surface/50 text-center py-3">
+                <div className="text-2xl font-bold text-neutral-300">
+                  {signals.filter(s => s.displacement.detected).length}
+                </div>
+                <div className="text-[10px] text-neutral-500">اندفاع مكتشف</div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="card bg-surface/50 text-center py-3">
+                <div className="text-2xl font-bold text-yellow-400">
+                  {signals.filter(s => s.filters.hasTrigger).length}
+                </div>
+                <div className="text-[10px] text-neutral-500">محفّزات نشطة</div>
+              </div>
+              <div className="card bg-surface/50 text-center py-3">
+                <div className="text-2xl font-bold text-neutral-300">
+                  {signals.filter(s => s.liquidity.sweptLevel).length}
+                </div>
+                <div className="text-[10px] text-neutral-500">Sweeps مكتشفة</div>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Loading */}
         {loading ? (
           <div className="text-center py-20">
-            <div className="animate-spin text-4xl mb-4">🏦</div>
-            <div className="text-neutral-400">جاري تحليل مناطق السيولة...</div>
+            <div className="animate-spin text-4xl mb-4">{mode === 'scalp' ? '⚡' : '🏦'}</div>
+            <div className="text-neutral-400">{mode === 'scalp' ? 'جاري البحث عن فرص سكالب...' : 'جاري تحليل مناطق السيولة...'}</div>
           </div>
         ) : (
           <div className="space-y-4">
@@ -353,50 +429,99 @@ export default function SMCPage() {
 
                     {/* Checklist Grid */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-                      {/* Trigger */}
-                      <div className={`p-3 rounded-xl ${sig.filters.hasTrigger ? 'bg-bullish/5 border border-bullish/20' : 'bg-surface/50'}`}>
-                        <div className="text-[10px] text-neutral-500 mb-1">1. المحفّز</div>
-                        <div className={`text-sm font-bold ${sig.filters.hasTrigger ? 'text-bullish' : 'text-bearish'}`}>
-                          {sig.filters.hasTrigger ? '✅ موجود' : '❌ غير موجود'}
-                        </div>
-                        <div className="text-[9px] text-neutral-500 mt-1">
-                          Vol: {(sig.filters.volumeRatio * 100).toFixed(0)}%
-                        </div>
-                      </div>
-
-                      {/* Liquidity */}
-                      <div className={`p-3 rounded-xl ${sig.liquidity.sweptLevel ? 'bg-bullish/5 border border-bullish/20' : sig.liquidity.atLiquidity ? 'bg-yellow-500/5 border border-yellow-500/20' : 'bg-surface/50'}`}>
-                        <div className="text-[10px] text-neutral-500 mb-1">2. السيولة</div>
-                        <div className={`text-sm font-bold ${sig.liquidity.sweptLevel ? 'text-bullish' : sig.liquidity.atLiquidity ? 'text-yellow-400' : 'text-bearish'}`}>
-                          {sig.liquidity.sweptLevel ? '✅ تم سحبها' : sig.liquidity.atLiquidity ? '⏳ قريب' : '❌ بعيد'}
-                        </div>
-                        {sig.liquidity.sweptLevel && (
-                          <div className="text-[9px] text-neutral-500 mt-1">{sig.liquidity.sweptLevel.label}</div>
-                        )}
-                      </div>
-
-                      {/* Displacement */}
-                      <div className={`p-3 rounded-xl ${sig.displacement.detected ? 'bg-bullish/5 border border-bullish/20' : 'bg-surface/50'}`}>
-                        <div className="text-[10px] text-neutral-500 mb-1">3. الاندفاع</div>
-                        <div className={`text-sm font-bold ${sig.displacement.detected ? 'text-bullish' : 'text-bearish'}`}>
-                          {sig.displacement.detected
-                            ? `✅ ${sig.displacement.direction === 'UP' ? 'صاعد' : 'هابط'} (${sig.displacement.strength})`
-                            : '❌ لا يوجد'}
-                        </div>
-                      </div>
-
-                      {/* Exhaustion */}
-                      <div className={`p-3 rounded-xl ${sig.exhaustion.detected ? 'bg-bullish/5 border border-bullish/20' : 'bg-surface/50'}`}>
-                        <div className="text-[10px] text-neutral-500 mb-1">4. الاستنزاف</div>
-                        <div className={`text-sm font-bold ${sig.exhaustion.detected ? 'text-bullish' : 'text-bearish'}`}>
-                          {sig.exhaustion.detected ? '✅ مكتشف' : '❌ لا يوجد'}
-                        </div>
-                        {sig.exhaustion.wickRatio > 0 && (
-                          <div className="text-[9px] text-neutral-500 mt-1">
-                            Wick: {(sig.exhaustion.wickRatio * 100).toFixed(0)}%
+                      {mode === 'scalp' ? (
+                        <>
+                          {/* Scalp: Quiet Market */}
+                          <div className={`p-3 rounded-xl ${sig.filters.quietMarket ? 'bg-bullish/5 border border-bullish/20' : 'bg-surface/50'}`}>
+                            <div className="text-[10px] text-neutral-500 mb-1">1. سوق هادئ</div>
+                            <div className={`text-sm font-bold ${sig.filters.quietMarket ? 'text-bullish' : 'text-bearish'}`}>
+                              {sig.filters.quietMarket ? '✅ هادئ' : '❌ متقلب'}
+                            </div>
+                            <div className="text-[9px] text-neutral-500 mt-1">
+                              {sig.filters.inRange ? 'نطاق ضيق' : `Vol: ${(sig.filters.volumeRatio * 100).toFixed(0)}%`}
+                            </div>
                           </div>
-                        )}
-                      </div>
+
+                          {/* Scalp: Displacement */}
+                          <div className={`p-3 rounded-xl ${sig.displacement.detected ? 'bg-bullish/5 border border-bullish/20' : 'bg-surface/50'}`}>
+                            <div className="text-[10px] text-neutral-500 mb-1">2. الاندفاع</div>
+                            <div className={`text-sm font-bold ${sig.displacement.detected ? 'text-bullish' : 'text-bearish'}`}>
+                              {sig.displacement.detected
+                                ? `✅ ${sig.displacement.direction === 'UP' ? 'صاعد' : 'هابط'} (${sig.displacement.strength})`
+                                : '❌ لا يوجد'}
+                            </div>
+                          </div>
+
+                          {/* Scalp: Pullback */}
+                          <div className={`p-3 rounded-xl ${sig.pullback.detected ? 'bg-bullish/5 border border-bullish/20' : sig.pullback.depth > 0 ? 'bg-yellow-500/5 border border-yellow-500/20' : 'bg-surface/50'}`}>
+                            <div className="text-[10px] text-neutral-500 mb-1">3. التصحيح</div>
+                            <div className={`text-sm font-bold ${sig.pullback.detected ? 'text-bullish' : sig.pullback.depth > 0 ? 'text-yellow-400' : 'text-bearish'}`}>
+                              {sig.pullback.detected ? '✅ مثالي' : sig.pullback.depth > 0 ? `⏳ ${sig.pullback.depth.toFixed(0)}%` : '❌ لا يوجد'}
+                            </div>
+                            {sig.pullback.depth > 0 && (
+                              <div className="text-[9px] text-neutral-500 mt-1">{sig.pullback.intact ? 'مستوى سليم' : 'كسر المستوى!'}</div>
+                            )}
+                          </div>
+
+                          {/* Scalp: Resume */}
+                          <div className={`p-3 rounded-xl ${sig.action !== 'WAIT' ? 'bg-bullish/5 border border-bullish/20' : 'bg-surface/50'}`}>
+                            <div className="text-[10px] text-neutral-500 mb-1">4. الاستئناف</div>
+                            <div className={`text-sm font-bold ${sig.action !== 'WAIT' ? 'text-bullish' : 'text-bearish'}`}>
+                              {sig.action !== 'WAIT' ? '✅ مؤكد' : '❌ انتظر'}
+                            </div>
+                            {sig.structure.atr > 0 && (
+                              <div className="text-[9px] text-neutral-500 mt-1">ATR: ${formatPrice(sig.structure.atr)}</div>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          {/* Sweep: Trigger */}
+                          <div className={`p-3 rounded-xl ${sig.filters.hasTrigger ? 'bg-bullish/5 border border-bullish/20' : 'bg-surface/50'}`}>
+                            <div className="text-[10px] text-neutral-500 mb-1">1. المحفّز</div>
+                            <div className={`text-sm font-bold ${sig.filters.hasTrigger ? 'text-bullish' : 'text-bearish'}`}>
+                              {sig.filters.hasTrigger ? '✅ موجود' : '❌ غير موجود'}
+                            </div>
+                            <div className="text-[9px] text-neutral-500 mt-1">
+                              Vol: {(sig.filters.volumeRatio * 100).toFixed(0)}%
+                            </div>
+                          </div>
+
+                          {/* Sweep: Liquidity */}
+                          <div className={`p-3 rounded-xl ${sig.liquidity.sweptLevel ? 'bg-bullish/5 border border-bullish/20' : sig.liquidity.atLiquidity ? 'bg-yellow-500/5 border border-yellow-500/20' : 'bg-surface/50'}`}>
+                            <div className="text-[10px] text-neutral-500 mb-1">2. السيولة</div>
+                            <div className={`text-sm font-bold ${sig.liquidity.sweptLevel ? 'text-bullish' : sig.liquidity.atLiquidity ? 'text-yellow-400' : 'text-bearish'}`}>
+                              {sig.liquidity.sweptLevel ? '✅ تم سحبها' : sig.liquidity.atLiquidity ? '⏳ قريب' : '❌ بعيد'}
+                            </div>
+                            {sig.liquidity.sweptLevel && (
+                              <div className="text-[9px] text-neutral-500 mt-1">{sig.liquidity.sweptLevel.label}</div>
+                            )}
+                          </div>
+
+                          {/* Sweep: Displacement */}
+                          <div className={`p-3 rounded-xl ${sig.displacement.detected ? 'bg-bullish/5 border border-bullish/20' : 'bg-surface/50'}`}>
+                            <div className="text-[10px] text-neutral-500 mb-1">3. الاندفاع</div>
+                            <div className={`text-sm font-bold ${sig.displacement.detected ? 'text-bullish' : 'text-bearish'}`}>
+                              {sig.displacement.detected
+                                ? `✅ ${sig.displacement.direction === 'UP' ? 'صاعد' : 'هابط'} (${sig.displacement.strength})`
+                                : '❌ لا يوجد'}
+                            </div>
+                          </div>
+
+                          {/* Sweep: Exhaustion */}
+                          <div className={`p-3 rounded-xl ${sig.exhaustion.detected ? 'bg-bullish/5 border border-bullish/20' : 'bg-surface/50'}`}>
+                            <div className="text-[10px] text-neutral-500 mb-1">4. الاستنزاف</div>
+                            <div className={`text-sm font-bold ${sig.exhaustion.detected ? 'text-bullish' : 'text-bearish'}`}>
+                              {sig.exhaustion.detected ? '✅ مكتشف' : '❌ لا يوجد'}
+                            </div>
+                            {sig.exhaustion.wickRatio > 0 && (
+                              <div className="text-[9px] text-neutral-500 mt-1">
+                                Wick: {(sig.exhaustion.wickRatio * 100).toFixed(0)}%
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      )}
                     </div>
 
                     {/* Structure Info */}
@@ -494,8 +619,12 @@ export default function SMCPage() {
                         </div>
 
                         {/* Execute Button */}
-                        <div className="flex justify-center">
-                          {executedTrades[sig.symbol] ? (
+                        <div className="flex flex-col items-center gap-2">
+                          {sessionLosses >= 2 ? (
+                            <div className="px-6 py-3 rounded-xl font-bold text-sm text-center bg-red-500/10 text-red-400 border border-red-500/20">
+                              ⛔ متوقف — خسارتين متتاليتين
+                            </div>
+                          ) : executedTrades[sig.symbol] ? (
                             <div className="px-6 py-3 rounded-xl font-bold text-sm text-center bg-bullish/20 text-bullish border border-bullish/30">
                               ✅ تم إرسال الأمر لـ MT5
                             </div>
@@ -545,6 +674,32 @@ export default function SMCPage() {
                                   : `🔴 نفّذ بيع على MT5 (${getLotSize(sig.symbol)} لوت)`}
                             </button>
                           )}
+
+                          {/* Loss tracking buttons */}
+                          <div className="flex items-center gap-2 mt-1">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                const newLosses = sessionLosses + 1
+                                setSessionLosses(newLosses)
+                                try { localStorage.setItem('smc_session_losses', String(newLosses)) } catch {}
+                              }}
+                              className="text-[10px] px-3 py-1 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all"
+                            >
+                              ❌ سجّل خسارة ({sessionLosses}/2)
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                const reset = Math.max(0, sessionLosses - 1)
+                                setSessionLosses(reset)
+                                try { localStorage.setItem('smc_session_losses', String(reset)) } catch {}
+                              }}
+                              className="text-[10px] px-3 py-1 rounded-lg bg-bullish/10 text-bullish hover:bg-bullish/20 transition-all"
+                            >
+                              ✅ سجّل ربح
+                            </button>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -576,18 +731,34 @@ export default function SMCPage() {
 
                 {/* Mini filter status */}
                 <div className="mt-2 flex items-center gap-2 flex-wrap">
-                  <span className={`text-[9px] px-2 py-0.5 rounded-full ${sig.filters.hasTrigger ? 'bg-bullish/10 text-bullish' : 'bg-white/5 text-neutral-600'}`}>
-                    {sig.filters.hasTrigger ? '✅' : '❌'} محفّز
-                  </span>
-                  <span className={`text-[9px] px-2 py-0.5 rounded-full ${sig.liquidity.atLiquidity || sig.liquidity.sweptLevel ? 'bg-bullish/10 text-bullish' : 'bg-white/5 text-neutral-600'}`}>
-                    {sig.liquidity.atLiquidity || sig.liquidity.sweptLevel ? '✅' : '❌'} سيولة
-                  </span>
-                  <span className={`text-[9px] px-2 py-0.5 rounded-full ${sig.displacement.detected ? 'bg-bullish/10 text-bullish' : 'bg-white/5 text-neutral-600'}`}>
-                    {sig.displacement.detected ? '✅' : '❌'} اندفاع
-                  </span>
-                  <span className={`text-[9px] px-2 py-0.5 rounded-full ${sig.exhaustion.detected ? 'bg-bullish/10 text-bullish' : 'bg-white/5 text-neutral-600'}`}>
-                    {sig.exhaustion.detected ? '✅' : '❌'} استنزاف
-                  </span>
+                  {mode === 'scalp' ? (
+                    <>
+                      <span className={`text-[9px] px-2 py-0.5 rounded-full ${sig.filters.quietMarket ? 'bg-bullish/10 text-bullish' : 'bg-white/5 text-neutral-600'}`}>
+                        {sig.filters.quietMarket ? '✅' : '❌'} هادئ
+                      </span>
+                      <span className={`text-[9px] px-2 py-0.5 rounded-full ${sig.displacement.detected ? 'bg-bullish/10 text-bullish' : 'bg-white/5 text-neutral-600'}`}>
+                        {sig.displacement.detected ? '✅' : '❌'} اندفاع
+                      </span>
+                      <span className={`text-[9px] px-2 py-0.5 rounded-full ${sig.pullback.detected ? 'bg-bullish/10 text-bullish' : 'bg-white/5 text-neutral-600'}`}>
+                        {sig.pullback.detected ? '✅' : '❌'} تصحيح
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className={`text-[9px] px-2 py-0.5 rounded-full ${sig.filters.hasTrigger ? 'bg-bullish/10 text-bullish' : 'bg-white/5 text-neutral-600'}`}>
+                        {sig.filters.hasTrigger ? '✅' : '❌'} محفّز
+                      </span>
+                      <span className={`text-[9px] px-2 py-0.5 rounded-full ${sig.liquidity.atLiquidity || sig.liquidity.sweptLevel ? 'bg-bullish/10 text-bullish' : 'bg-white/5 text-neutral-600'}`}>
+                        {sig.liquidity.atLiquidity || sig.liquidity.sweptLevel ? '✅' : '❌'} سيولة
+                      </span>
+                      <span className={`text-[9px] px-2 py-0.5 rounded-full ${sig.displacement.detected ? 'bg-bullish/10 text-bullish' : 'bg-white/5 text-neutral-600'}`}>
+                        {sig.displacement.detected ? '✅' : '❌'} اندفاع
+                      </span>
+                      <span className={`text-[9px] px-2 py-0.5 rounded-full ${sig.exhaustion.detected ? 'bg-bullish/10 text-bullish' : 'bg-white/5 text-neutral-600'}`}>
+                        {sig.exhaustion.detected ? '✅' : '❌'} استنزاف
+                      </span>
+                    </>
+                  )}
                 </div>
 
                 {/* Expanded Details */}
@@ -662,24 +833,47 @@ export default function SMCPage() {
 
         {/* Rules Card */}
         <div className="mt-12 card bg-surface/30">
-          <h3 className="font-semibold mb-3 text-sm">📌 قواعد النظام</h3>
+          <h3 className="font-semibold mb-3 text-sm">📌 قواعد {mode === 'scalp' ? 'السكالب السريع' : 'سحب السيولة'}</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-neutral-400">
-            <div className="flex gap-2">
-              <span className="text-accent">1.</span>
-              <span>لا تدخل بدون <strong className="text-white">محفّز واضح</strong> (فوليوم، كسر، جلسة)</span>
-            </div>
-            <div className="flex gap-2">
-              <span className="text-accent">2.</span>
-              <span>السعر لازم يكون عند <strong className="text-yellow-400">منطقة سيولة</strong> — مو في النص</span>
-            </div>
-            <div className="flex gap-2">
-              <span className="text-accent">3.</span>
-              <span>انتظر <strong className="text-white">سحب السيولة</strong> ثم الانعكاس — لا تتوقع</span>
-            </div>
-            <div className="flex gap-2">
-              <span className="text-accent">4.</span>
-              <span>أقصى مخاطرة <strong className="text-bearish">1.5%</strong> — لا مضاعفة — أقصى 2 صفقات يومياً</span>
-            </div>
+            {mode === 'scalp' ? (
+              <>
+                <div className="flex gap-2">
+                  <span className="text-accent">1.</span>
+                  <span>لا تتداول إلا في <strong className="text-white">سوق هادئ</strong> بدون تقلبات عالية</span>
+                </div>
+                <div className="flex gap-2">
+                  <span className="text-accent">2.</span>
+                  <span>انتظر <strong className="text-yellow-400">اندفاع قوي</strong> (3-5 شموع) ثم تصحيح خفيف</span>
+                </div>
+                <div className="flex gap-2">
+                  <span className="text-accent">3.</span>
+                  <span>ادخل مع اتجاه الاندفاع — <strong className="text-white">لا تدخل في منتصف الحركة</strong></span>
+                </div>
+                <div className="flex gap-2">
+                  <span className="text-accent">4.</span>
+                  <span>ربح صغير ثابت (1x ATR) — <strong className="text-bearish">لا طمع — لا مضاعفة</strong> — توقف بعد خسارتين</span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex gap-2">
+                  <span className="text-accent">1.</span>
+                  <span>لا تدخل بدون <strong className="text-white">محفّز واضح</strong> (فوليوم، كسر، جلسة)</span>
+                </div>
+                <div className="flex gap-2">
+                  <span className="text-accent">2.</span>
+                  <span>السعر لازم يكون عند <strong className="text-yellow-400">منطقة سيولة</strong> — مو في النص</span>
+                </div>
+                <div className="flex gap-2">
+                  <span className="text-accent">3.</span>
+                  <span>انتظر <strong className="text-white">سحب السيولة</strong> ثم الانعكاس — لا تتوقع</span>
+                </div>
+                <div className="flex gap-2">
+                  <span className="text-accent">4.</span>
+                  <span>أقصى مخاطرة <strong className="text-bearish">1.5%</strong> — لا مضاعفة — أقصى 2 صفقات يومياً</span>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
