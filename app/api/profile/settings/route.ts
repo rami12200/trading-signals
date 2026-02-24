@@ -12,7 +12,7 @@ function getServiceSupabase() {
 export async function PUT(request: Request) {
   try {
     const body = await request.json()
-    const { user_id, auto_trade, auto_trade_min_confidence, auto_trade_timeframe } = body
+    const { user_id, auto_trade, auto_trade_min_confidence, auto_trade_timeframe, auto_trade_lot_size } = body
 
     if (!user_id) {
       return NextResponse.json({ success: false, error: 'Missing user_id' }, { status: 400 })
@@ -42,6 +42,9 @@ export async function PUT(request: Request) {
     }
     if (auto_trade_timeframe === '5m' || auto_trade_timeframe === '15m') {
       updates.auto_trade_timeframe = auto_trade_timeframe
+    }
+    if (typeof auto_trade_lot_size === 'number' && auto_trade_lot_size > 0) {
+      updates.auto_trade_lot_size = Math.max(0.01, Math.min(10, auto_trade_lot_size))
     }
 
     if (Object.keys(updates).length === 0) {

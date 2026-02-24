@@ -43,6 +43,8 @@ export default function ProfilePage() {
   const [autoTrade, setAutoTrade] = useState(false)
   const [minConfidence, setMinConfidence] = useState(65)
   const [autoTimeframe, setAutoTimeframe] = useState('15m')
+  const [autoLotSize, setAutoLotSize] = useState(0.1)
+  const [customLotInput, setCustomLotInput] = useState('')
   const [savingSettings, setSavingSettings] = useState(false)
   const [settingsSaved, setSettingsSaved] = useState(false)
 
@@ -57,10 +59,11 @@ export default function ProfilePage() {
       setAutoTrade(user.auto_trade ?? false)
       setMinConfidence(user.auto_trade_min_confidence ?? 65)
       setAutoTimeframe(user.auto_trade_timeframe ?? '15m')
+      setAutoLotSize(user.auto_trade_lot_size ?? 0.1)
     }
   }, [user, authLoading, router])
 
-  const saveAutoTradeSettings = async (newAutoTrade: boolean, newMinConf: number, newTimeframe: string = autoTimeframe) => {
+  const saveAutoTradeSettings = async (newAutoTrade: boolean, newMinConf: number, newTimeframe: string = autoTimeframe, newLotSize: number = autoLotSize) => {
     if (!user) return
     setSavingSettings(true)
     setSettingsSaved(false)
@@ -73,6 +76,7 @@ export default function ProfilePage() {
           auto_trade: newAutoTrade,
           auto_trade_min_confidence: newMinConf,
           auto_trade_timeframe: newTimeframe,
+          auto_trade_lot_size: newLotSize,
         }),
       })
       const data = await res.json()
@@ -352,6 +356,56 @@ export default function ProfilePage() {
                 <div className="flex justify-between text-[9px] text-neutral-600">
                   <span>30% — أكثر صفقات</span>
                   <span>95% — أقل صفقات وأدق</span>
+                </div>
+
+                {/* Lot Size */}
+                <div className="pt-3 border-t border-white/5">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-sm">حجم اللوت الافتراضي</div>
+                    <span className="text-sm font-bold font-mono text-accent">{autoLotSize}</span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {[0.01, 0.05, 0.1, 0.5, 1.0].map((lot) => (
+                      <button
+                        key={lot}
+                        onClick={() => {
+                          setAutoLotSize(lot)
+                          setCustomLotInput('')
+                          saveAutoTradeSettings(autoTrade, minConfidence, autoTimeframe, lot)
+                        }}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-mono font-medium transition-all ${
+                          autoLotSize === lot && !customLotInput
+                            ? 'bg-accent text-white shadow-lg shadow-accent/20'
+                            : 'bg-white/5 text-neutral-400 hover:bg-white/10'
+                        }`}
+                      >
+                        {lot}
+                      </button>
+                    ))}
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      max="10"
+                      placeholder="مخصص"
+                      value={customLotInput}
+                      onChange={(e) => {
+                        const val = e.target.value
+                        setCustomLotInput(val)
+                        const num = parseFloat(val)
+                        if (num > 0 && num <= 10) {
+                          setAutoLotSize(num)
+                        }
+                      }}
+                      onBlur={() => {
+                        if (autoLotSize > 0) saveAutoTradeSettings(autoTrade, minConfidence, autoTimeframe, autoLotSize)
+                      }}
+                      className="w-20 px-2 py-1.5 rounded-lg bg-white/5 border border-white/10 text-xs font-mono text-white text-center focus:border-accent/50 focus:outline-none"
+                    />
+                  </div>
+                  <div className="text-[9px] text-neutral-600 mt-1">
+                    يُستخدم في التنفيذ التلقائي — ممكن تغيّره لكل عملة من صفحة السكالبينج
+                  </div>
                 </div>
               </div>
             )}

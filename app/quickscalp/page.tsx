@@ -241,7 +241,7 @@ export default function QuickScalpPage() {
     try { localStorage.setItem('quickscalp_lot_sizes', JSON.stringify(updated)) } catch {}
   }
 
-  const getLotSize = (symbol: string) => lotSizes[symbol] || 0.1
+  const getLotSize = (symbol: string) => lotSizes[symbol] || (user?.auto_trade_lot_size ?? 0.1)
 
   const toggleFavorite = (symbol: string) => {
     const updated = favorites.includes(symbol)

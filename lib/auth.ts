@@ -22,6 +22,7 @@ export interface UserProfile {
   auto_trade: boolean
   auto_trade_min_confidence: number
   auto_trade_timeframe: string
+  auto_trade_lot_size: number
   created_at: string
 }
 
@@ -93,6 +94,7 @@ export async function getUserProfile(): Promise<UserProfile | null> {
       auto_trade: false,
       auto_trade_min_confidence: 65,
       auto_trade_timeframe: '15m',
+      auto_trade_lot_size: 0.1,
       created_at: new Date().toISOString(),
     }
     await supabase.from('profiles').upsert(profile)
