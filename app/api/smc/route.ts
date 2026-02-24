@@ -260,8 +260,8 @@ function detectDisplacement(candles: OHLCV[]): { detected: boolean; direction: '
 
   const avgBodyRatio = totalBodyRatio / recent.length
 
-  if (bullCount >= 3) return { detected: true, direction: 'UP', strength: bullCount, avgBodyRatio }
-  if (bearCount >= 3) return { detected: true, direction: 'DOWN', strength: bearCount, avgBodyRatio }
+  if (bullCount >= 2) return { detected: true, direction: 'UP', strength: bullCount, avgBodyRatio }
+  if (bearCount >= 2) return { detected: true, direction: 'DOWN', strength: bearCount, avgBodyRatio }
   return { detected: false, direction: 'NONE', strength: 0, avgBodyRatio }
 }
 
@@ -337,11 +337,11 @@ function detectPullback(candles: OHLCV[], dispDirection: 'UP' | 'DOWN' | 'NONE')
     const retracement = swingHigh - lastCandle.low
     const depth = (retracement / dispRange) * 100
     const intact = lastCandle.low > dispStart // hasn't broken the swing low
-    const pullbackHappening = lastCandle.close < swingHigh && depth >= 20 && depth <= 65
+    const pullbackHappening = lastCandle.close < swingHigh && depth >= 10 && depth <= 80
     const resuming = lastCandle.close > prevCandle.close // starting to go back up
 
     return {
-      detected: pullbackHappening && intact && resuming,
+      detected: pullbackHappening && intact,
       depth,
       intact,
       direction: 'UP',
@@ -355,11 +355,11 @@ function detectPullback(candles: OHLCV[], dispDirection: 'UP' | 'DOWN' | 'NONE')
     const retracement = lastCandle.high - swingLow
     const depth = (retracement / dispRange) * 100
     const intact = lastCandle.high < dispStart // hasn't broken the swing high
-    const pullbackHappening = lastCandle.close > swingLow && depth >= 20 && depth <= 65
+    const pullbackHappening = lastCandle.close > swingLow && depth >= 10 && depth <= 80
     const resuming = lastCandle.close < prevCandle.close // starting to go back down
 
     return {
-      detected: pullbackHappening && intact && resuming,
+      detected: pullbackHappening && intact,
       depth,
       intact,
       direction: 'DOWN',
@@ -376,7 +376,8 @@ function isQuietMarket(candles: OHLCV[], volumes: number[]): { quiet: boolean; a
   const vol = analyzeVolume(volumes, 20)
 
   const atrRatio = (atr && atr50 && atr50 > 0) ? atr / atr50 : 1
-  const quiet = atrRatio < 0.85 && vol.ratio < 1.2
+  // Relaxed: not in extreme volatility — allow normal market conditions
+  const quiet = atrRatio < 1.3 || vol.ratio < 2.0
 
   return { quiet, atrRatio, volRatio: vol.ratio }
 }
@@ -423,9 +424,9 @@ async function analyzeScalp(
   const volumeSpike = vol.ratio >= 1.5
   const nySession = isNYSessionOpen()
 
-  // Scalp requires quiet/ranging market — no chaos
+  // Scalp prefers calm market but doesn't hard-block on it
   const quietMarket = quietCheck.quiet || inRange
-  if (!quietMarket) {
+  if (!quietMarket && quietCheck.atrRatio > 2.0) {
     // Build WAIT signal
     const weeklyHigh = weeklyCandles.length >= 2 ? weeklyCandles[weeklyCandles.length - 2].high : 0
     const weeklyLow = weeklyCandles.length >= 2 ? weeklyCandles[weeklyCandles.length - 2].low : 0
@@ -476,19 +477,21 @@ async function analyzeScalp(
   const lastBearish = lastCandle.close < lastCandle.open
   const lastBody = Math.abs(lastCandle.close - lastCandle.open)
 
-  if (disp.direction === 'UP' && pullback.detected && lastBullish) {
+  if (disp.direction === 'UP' && pullback.detected) {
     action = 'BUY'
-    reason = 'اندفاع صاعد + تصحيح خفيف + استئناف ← شراء سريع'
+    reason = 'اندفاع صاعد + تصحيح خفيف ← شراء سريع'
     reasons.push(`✅ اندفاع صاعد (${disp.strength} شموع قوية)`)
     reasons.push(`📐 تصحيح ${pullback.depth.toFixed(0)}% — مستوى سليم`)
-    reasons.push('✅ شمعة صاعدة تؤكد الاستئناف')
+    if (lastBullish) reasons.push('✅ شمعة صاعدة تؤكد الاستئناف')
+    else reasons.push('⏳ انتظر شمعة صاعدة للتأكيد')
     reasons.push('🎯 هدف سريع — 1x ATR')
-  } else if (disp.direction === 'DOWN' && pullback.detected && lastBearish) {
+  } else if (disp.direction === 'DOWN' && pullback.detected) {
     action = 'SELL'
-    reason = 'اندفاع هابط + تصحيح خفيف + استئناف ← بيع سريع'
+    reason = 'اندفاع هابط + تصحيح خفيف ← بيع سريع'
     reasons.push(`✅ اندفاع هابط (${disp.strength} شموع قوية)`)
     reasons.push(`📐 تصحيح ${pullback.depth.toFixed(0)}% — مستوى سليم`)
-    reasons.push('✅ شمعة هابطة تؤكد الاستئناف')
+    if (lastBearish) reasons.push('✅ شمعة هابطة تؤكد الاستئناف')
+    else reasons.push('⏳ انتظر شمعة هابطة للتأكيد')
     reasons.push('🎯 هدف سريع — 1x ATR')
   }
 
@@ -528,11 +531,14 @@ async function analyzeScalp(
   let confidence = 0
   if (action !== 'WAIT') {
     confidence = 50
-    if (disp.strength >= 4) confidence += 10
-    if (pullback.depth >= 30 && pullback.depth <= 55) confidence += 10 // ideal pullback
+    if (disp.strength >= 3) confidence += 8
+    if (disp.strength >= 4) confidence += 5
+    if (pullback.depth >= 25 && pullback.depth <= 60) confidence += 10 // ideal pullback
     if (pullback.intact) confidence += 5
-    if (quietMarket) confidence += 8
-    if (inRange) confidence += 5
+    if (quietMarket) confidence += 5
+    if (inRange) confidence += 3
+    // Resuming candle confirmation boost
+    if ((action === 'BUY' && lastBullish) || (action === 'SELL' && lastBearish)) confidence += 10
     confidence -= cancelReasons.length * 10
     confidence = Math.max(10, Math.min(95, confidence))
   }
