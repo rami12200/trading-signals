@@ -121,13 +121,12 @@ export async function getDatabentoKlines(
   const rawLimit = getRawLimit(interval, limit)
   const aggFactor = getAggFactor(interval)
 
-  // حساب التاريخ — end حصري في Databento فلازم نضيف يوم
+  // حساب التاريخ — end بصيغة ISO كاملة (الوقت الحالي)
   const now = new Date()
   const daysBack = interval === '1d' || interval === '1w' ? 365 : 10
   const start = new Date(now.getTime() - daysBack * 24 * 60 * 60 * 1000)
-  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000)
   const startStr = start.toISOString().split('T')[0]
-  const endStr = tomorrow.toISOString().split('T')[0]
+  const endStr = now.toISOString()
 
   try {
     const params = new URLSearchParams({
