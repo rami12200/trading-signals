@@ -121,12 +121,13 @@ export async function getDatabentoKlines(
   const rawLimit = getRawLimit(interval, limit)
   const aggFactor = getAggFactor(interval)
 
-  // حساب التاريخ — نرجع يومين عمل كحد أدنى
+  // حساب التاريخ — end حصري في Databento فلازم نضيف يوم
   const now = new Date()
   const daysBack = interval === '1d' || interval === '1w' ? 365 : 10
   const start = new Date(now.getTime() - daysBack * 24 * 60 * 60 * 1000)
+  const tomorrow = new Date(now.getTime() + 24 * 60 * 60 * 1000)
   const startStr = start.toISOString().split('T')[0]
-  const endStr = now.toISOString().split('T')[0]
+  const endStr = tomorrow.toISOString().split('T')[0]
 
   try {
     const params = new URLSearchParams({
