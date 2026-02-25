@@ -31,7 +31,7 @@ export async function getTwelveDataKlines(
 ): Promise<any[]> {
   const apiKey = process.env.TWELVEDATA_API_KEY
   if (!apiKey) {
-    console.error('TWELVEDATA_API_KEY not set')
+    console.error('[TwelveData] ERROR: TWELVEDATA_API_KEY not set in environment variables!')
     return []
   }
 
@@ -39,15 +39,23 @@ export async function getTwelveDataKlines(
 
   try {
     const url = `${TWELVEDATA_BASE}/time_series?symbol=${encodeURIComponent(symbol)}&interval=${tdInterval}&outputsize=${limit}&order=asc&apikey=${apiKey}`
+    console.log(`[TwelveData] Fetching ${symbol} ${tdInterval}...`)
     const res = await fetch(url, {
       headers: { 'Accept': 'application/json' },
       signal: AbortSignal.timeout(15000),
     })
 
-    if (!res.ok) return []
+    if (!res.ok) {
+      console.error(`[TwelveData] HTTP ${res.status} for ${symbol}`)
+      return []
+    }
 
     const data = await res.json()
-    if (data.status !== 'ok' || !data.values) return []
+    if (data.status !== 'ok' || !data.values) {
+      console.error(`[TwelveData] Bad response for ${symbol}:`, data.status, data.message || '')
+      return []
+    }
+    console.log(`[TwelveData] Got ${data.values.length} candles for ${symbol}`)
 
     // Convert Twelve Data format to Binance kline format:
     // [openTime, open, high, low, close, volume, closeTime, ...]

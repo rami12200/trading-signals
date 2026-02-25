@@ -150,8 +150,81 @@ function calcConfidence(
   return Math.max(10, Math.min(95, score))
 }
 
-function analyzeQuickScalp(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL', mtfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL'): QuickScalpSignal | null {
+// === Asset-specific trading hours check ===
+type AssetType = 'crypto' | 'stocks' | 'forex' | 'metals'
+
+function getAssetType(category: string): AssetType {
+  if (category === 'stocks') return 'stocks'
+  if (category === 'forex') return 'forex'
+  if (category === 'metals') return 'metals'
+  return 'crypto'
+}
+
+function isTradingHoursOpen(assetType: AssetType): { open: boolean; reason: string } {
+  const now = new Date()
+  const utcH = now.getUTCHours()
+  const utcM = now.getUTCMinutes()
+  const totalMin = utcH * 60 + utcM
+  const day = now.getUTCDay() // 0=Sun, 6=Sat
+
+  if (assetType === 'crypto') return { open: true, reason: '' }
+
+  if (assetType === 'stocks') {
+    // US market: 9:30 AM - 3:30 PM ET = 14:30 - 20:30 UTC (skip last 30 min)
+    // Closed on weekends
+    if (day === 0 || day === 6) return { open: false, reason: 'السوق الأمريكي مغلق (عطلة نهاية الأسبوع)' }
+    if (totalMin < 870 || totalMin > 1230) return { open: false, reason: 'السوق الأمريكي مغلق — يفتح 9:30 AM ET' }
+    // First 15 min too volatile
+    if (totalMin < 885) return { open: false, reason: 'انتظر 15 دقيقة بعد الافتتاح (تقلبات عالية)' }
+    return { open: true, reason: '' }
+  }
+
+  if (assetType === 'forex') {
+    // Best hours: London+NY overlap 13:00-17:00 UTC
+    if (day === 0 || day === 6) return { open: false, reason: 'سوق الفوركس مغلق (عطلة نهاية الأسبوع)' }
+    // Forex trades 24h on weekdays, but we prefer high liquidity
+    const highLiquidity = (totalMin >= 780 && totalMin <= 1020) // 13:00-17:00 UTC
+    if (!highLiquidity) return { open: true, reason: '⚠️ سيولة منخفضة — أفضل وقت 13:00-17:00 UTC' }
+    return { open: true, reason: '' }
+  }
+
+  if (assetType === 'metals') {
+    if (day === 0 || day === 6) return { open: false, reason: 'سوق المعادن مغلق (عطلة نهاية الأسبوع)' }
+    return { open: true, reason: '' }
+  }
+
+  return { open: true, reason: '' }
+}
+
+// === Asset-specific config ===
+interface AssetConfig {
+  emaFast: number
+  emaSlow: number
+  minConfidence: number
+  slATRMultiplier: number
+  tpATRMultiplier: number
+  requireVolume: boolean
+  minVolumeRatio: number
+  requireBothTF: boolean // require both MTF and HTF alignment
+}
+
+function getAssetConfig(assetType: AssetType): AssetConfig {
+  switch (assetType) {
+    case 'stocks':
+      return { emaFast: 9, emaSlow: 21, minConfidence: 65, slATRMultiplier: 1.5, tpATRMultiplier: 2.5, requireVolume: true, minVolumeRatio: 1.3, requireBothTF: true }
+    case 'forex':
+      return { emaFast: 9, emaSlow: 21, minConfidence: 60, slATRMultiplier: 1.0, tpATRMultiplier: 2.0, requireVolume: false, minVolumeRatio: 0, requireBothTF: false }
+    case 'metals':
+      return { emaFast: 9, emaSlow: 21, minConfidence: 60, slATRMultiplier: 1.5, tpATRMultiplier: 2.0, requireVolume: false, minVolumeRatio: 0, requireBothTF: false }
+    default: // crypto
+      return { emaFast: 9, emaSlow: 21, minConfidence: 50, slATRMultiplier: 1.5, tpATRMultiplier: 2.5, requireVolume: false, minVolumeRatio: 0, requireBothTF: false }
+  }
+}
+
+function analyzeQuickScalp(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL', mtfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL', assetType: AssetType = 'crypto'): QuickScalpSignal | null {
   if (candles.length < 50) return null
+
+  const config = getAssetConfig(assetType)
 
   const closes = candles.map((c) => c.close)
   const currentPrice = closes[closes.length - 1]
@@ -387,24 +460,58 @@ function analyzeQuickScalp(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'D
 
   // ============================================
   // 🔴 DUAL TREND FILTER (15m + 1h)
-  // Block trades if EITHER timeframe is against us
+  // Stocks: require BOTH timeframes aligned (stricter)
+  // Others: block if EITHER is against us
   // ============================================
-  if ((htfTrend === 'UP' || mtfTrend === 'UP') && (action === 'SELL')) {
+  if (config.requireBothTF) {
+    // Stocks: both MTF and HTF must agree with the trade direction
+    const isBuyAction = action === 'BUY'
+    const isSellAction = action === 'SELL'
+    if (isBuyAction && (htfTrend !== 'UP' || mtfTrend !== 'UP')) {
+      action = 'WAIT'
+      reason = 'الأسهم تحتاج تأكيد ترند — كلا الفريمين لازم صاعد'
+      reasons.length = 0
+      reasons.push(`فريم 15 دقيقة: ${mtfTrend === 'UP' ? '✅ صاعد' : '❌ ' + mtfTrend}`)
+      reasons.push(`فريم الساعة: ${htfTrend === 'UP' ? '✅ صاعد' : '❌ ' + htfTrend}`)
+      reasons.push('انتظر حتى يتوافق الترندان')
+    } else if (isSellAction && (htfTrend !== 'DOWN' || mtfTrend !== 'DOWN')) {
+      action = 'WAIT'
+      reason = 'الأسهم تحتاج تأكيد ترند — كلا الفريمين لازم هابط'
+      reasons.length = 0
+      reasons.push(`فريم 15 دقيقة: ${mtfTrend === 'DOWN' ? '✅ هابط' : '❌ ' + mtfTrend}`)
+      reasons.push(`فريم الساعة: ${htfTrend === 'DOWN' ? '✅ هابط' : '❌ ' + htfTrend}`)
+      reasons.push('انتظر حتى يتوافق الترندان')
+    }
+  } else {
+    if ((htfTrend === 'UP' || mtfTrend === 'UP') && (action === 'SELL')) {
+      action = 'WAIT'
+      reason = 'الترند صاعد — ممنوع البيع'
+      reasons.length = 0
+      if (mtfTrend === 'UP') reasons.push('📈 الترند على فريم 15 دقيقة صاعد')
+      if (htfTrend === 'UP') reasons.push('📈 الترند على فريم الساعة صاعد')
+      reasons.push('البيع ضد الترند = خطر عالي')
+      reasons.push('انتظر إشارة شراء مع الترند')
+    } else if ((htfTrend === 'DOWN' || mtfTrend === 'DOWN') && (action === 'BUY')) {
+      action = 'WAIT'
+      reason = 'الترند هابط — ممنوع الشراء'
+      reasons.length = 0
+      if (mtfTrend === 'DOWN') reasons.push('📉 الترند على فريم 15 دقيقة هابط')
+      if (htfTrend === 'DOWN') reasons.push('📉 الترند على فريم الساعة هابط')
+      reasons.push('الشراء ضد الترند = خطر عالي')
+      reasons.push('انتظر إشارة بيع مع الترند')
+    }
+  }
+
+  // ============================================
+  // 📊 VOLUME FILTER (stocks require high volume)
+  // ============================================
+  if (config.requireVolume && action !== 'WAIT' && vol.ratio < config.minVolumeRatio) {
     action = 'WAIT'
-    reason = 'الترند صاعد — ممنوع البيع'
+    reason = 'حجم التداول ضعيف — انتظر سيولة أعلى'
     reasons.length = 0
-    if (mtfTrend === 'UP') reasons.push('📈 الترند على فريم 15 دقيقة صاعد')
-    if (htfTrend === 'UP') reasons.push('📈 الترند على فريم الساعة صاعد')
-    reasons.push('البيع ضد الترند = خطر عالي')
-    reasons.push('انتظر إشارة شراء مع الترند')
-  } else if ((htfTrend === 'DOWN' || mtfTrend === 'DOWN') && (action === 'BUY')) {
-    action = 'WAIT'
-    reason = 'الترند هابط — ممنوع الشراء'
-    reasons.length = 0
-    if (mtfTrend === 'DOWN') reasons.push('📉 الترند على فريم 15 دقيقة هابط')
-    if (htfTrend === 'DOWN') reasons.push('📉 الترند على فريم الساعة هابط')
-    reasons.push('الشراء ضد الترند = خطر عالي')
-    reasons.push('انتظر إشارة بيع مع الترند')
+    reasons.push(`الفوليوم ${(vol.ratio * 100).toFixed(0)}% من المتوسط`)
+    reasons.push(`المطلوب: ${(config.minVolumeRatio * 100).toFixed(0)}% على الأقل`)
+    reasons.push('الأسهم تحتاج فوليوم عالي لتأكيد الحركة')
   }
 
   // EXIT conditions — detect actual reversal happening
@@ -471,38 +578,38 @@ function analyzeQuickScalp(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'D
 
   if (action === 'BUY' || action === 'EXIT_SELL') {
     // SL: nearest support below price, or ATR-based
-    const nearSupport = sr.support.filter((s) => s < currentPrice).pop()
-    const atrSL = currentPrice - effectiveATR * 1.5
-    stopLoss = nearSupport && nearSupport > atrSL
-      ? nearSupport - effectiveATR * 0.15 // slightly below support
+    const nearSup = sr.support.filter((s) => s < currentPrice).pop()
+    const atrSL = currentPrice - effectiveATR * config.slATRMultiplier
+    stopLoss = nearSup && nearSup > atrSL
+      ? nearSup - effectiveATR * 0.15 // slightly below support
       : atrSL
     // TP: nearest resistance above price, or ATR-based
-    const nearResistance = sr.resistance.find((r) => r > currentPrice)
-    const atrTP = currentPrice + effectiveATR * 2.5
-    target = nearResistance && nearResistance < atrTP * 1.5
-      ? nearResistance - effectiveATR * 0.05 // slightly before resistance
+    const nearRes = sr.resistance.find((r) => r > currentPrice)
+    const atrTP = currentPrice + effectiveATR * config.tpATRMultiplier
+    target = nearRes && nearRes < atrTP * 1.5
+      ? nearRes - effectiveATR * 0.05 // slightly before resistance
       : atrTP
   } else if (action === 'SELL' || action === 'EXIT_BUY') {
     // SL: nearest resistance above price, or ATR-based
-    const nearResistance = sr.resistance.find((r) => r > currentPrice)
-    const atrSL = currentPrice + effectiveATR * 1.5
-    stopLoss = nearResistance && nearResistance < atrSL
-      ? nearResistance + effectiveATR * 0.15 // slightly above resistance
+    const nearRes = sr.resistance.find((r) => r > currentPrice)
+    const atrSL = currentPrice + effectiveATR * config.slATRMultiplier
+    stopLoss = nearRes && nearRes < atrSL
+      ? nearRes + effectiveATR * 0.15 // slightly above resistance
       : atrSL
     // TP: nearest support below price, or ATR-based
-    const nearSupport = sr.support.filter((s) => s < currentPrice).pop()
-    const atrTP = currentPrice - effectiveATR * 2.5
-    target = nearSupport && nearSupport > atrTP * 0.5
-      ? nearSupport + effectiveATR * 0.05 // slightly before support
+    const nearSup = sr.support.filter((s) => s < currentPrice).pop()
+    const atrTP = currentPrice - effectiveATR * config.tpATRMultiplier
+    target = nearSup && nearSup > atrTP * 0.5
+      ? nearSup + effectiveATR * 0.05 // slightly before support
       : atrTP
   } else {
     // WAIT — show hypothetical levels
     if (emaTrend === 'UP') {
-      stopLoss = currentPrice - effectiveATR * 1.5
-      target = currentPrice + effectiveATR * 2.5
+      stopLoss = currentPrice - effectiveATR * config.slATRMultiplier
+      target = currentPrice + effectiveATR * config.tpATRMultiplier
     } else {
-      stopLoss = currentPrice + effectiveATR * 1.5
-      target = currentPrice - effectiveATR * 2.5
+      stopLoss = currentPrice + effectiveATR * config.slATRMultiplier
+      target = currentPrice - effectiveATR * config.tpATRMultiplier
     }
   }
 
@@ -583,6 +690,20 @@ function analyzeQuickScalp(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'D
   else if (result.confidence >= 35) result.confidenceLabel = 'ثقة منخفضة'
   else result.confidenceLabel = 'ثقة ضعيفة'
 
+  // === MINIMUM CONFIDENCE FILTER (asset-specific) ===
+  if (result.action !== 'WAIT' && result.action !== 'EXIT_BUY' && result.action !== 'EXIT_SELL') {
+    if (result.confidence < config.minConfidence) {
+      result.action = 'WAIT'
+      result.actionText = '⏳ انتظر'
+      result.reason = `الثقة ${result.confidence}% أقل من الحد المطلوب (${config.minConfidence}%)`
+      result.reasons = [
+        `الحد الأدنى للثقة: ${config.minConfidence}%`,
+        `الثقة الحالية: ${result.confidence}%`,
+        'انتظر إشارة أقوى',
+      ]
+    }
+  }
+
   return result
 }
 
@@ -605,6 +726,42 @@ export async function GET(request: Request) {
     // Use specific symbol, category pairs, or default major pairs
     const symbols = symbolParam ? [symbolParam] : getCategoryPairs(category)
     const source = getCategorySource(category)
+    const assetType = getAssetType(category)
+
+    // === Trading hours check ===
+    const tradingHours = isTradingHoursOpen(assetType)
+    if (!tradingHours.open) {
+      return NextResponse.json({
+        success: true,
+        data: {
+          signals: symbols.map(s => ({
+            id: `qs-${s}-closed`,
+            symbol: s,
+            displaySymbol: formatSymbol(s),
+            price: 0,
+            action: 'WAIT' as ScalpAction,
+            actionText: '⏳ السوق مغلق',
+            reason: tradingHours.reason,
+            reasons: [tradingHours.reason],
+            entry: 0, stopLoss: 0, target: 0,
+            profitPct: '0', riskPct: '0', riskReward: '0',
+            indicators: { rsi: 50, rsiStatus: 'مغلق', ema9: 0, ema21: 0, emaTrend: 'UP' as const, macdHistogram: 0, macdTrend: 'محايد', bbPosition: 50, atr: 0, volumeSpike: false },
+            momentum: 'WEAK' as const,
+            signalQuality: 'NORMAL' as const,
+            confidence: 0, confidenceLabel: 'السوق مغلق',
+            signalSince: '', signalAgeSeconds: 0,
+            reversalWarning: false, reversalReason: '',
+            timestamp: new Date().toISOString(),
+          })),
+          interval,
+          count: symbols.length,
+          actionable: 0,
+          marketClosed: true,
+          marketClosedReason: tradingHours.reason,
+          timestamp: new Date().toISOString(),
+        },
+      })
+    }
 
     const signals: QuickScalpSignal[] = []
 
@@ -654,7 +811,7 @@ export async function GET(request: Request) {
           }
         } catch {}
 
-        return analyzeQuickScalp(candles, symbol, htfTrend, mtfTrend)
+        return analyzeQuickScalp(candles, symbol, htfTrend, mtfTrend, assetType)
       } catch {
         return null
       }
