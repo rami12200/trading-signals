@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getKlines, CRYPTO_PAIRS, formatSymbol } from '@/lib/binance'
+import { getKlines, CRYPTO_PAIRS, formatSymbol, getCategoryPairs, CryptoCategory } from '@/lib/binance'
 import {
   parseKlines,
   calcEMA,
@@ -39,168 +39,6 @@ function isRateLimited(ip: string): boolean {
   if (rateLimiter[ip].length >= RATE_LIMIT_MAX) return true
   rateLimiter[ip].push(now)
   return false
-}
-
-// === ZigZag Indicator ===
-// Detects significant swing highs/lows based on percentage deviation
-interface ZigZagPoint {
-  index: number
-  price: number
-  type: 'HIGH' | 'LOW'
-}
-
-function calcZigZag(candles: OHLCV[], deviation: number = 0.5): ZigZagPoint[] {
-  if (candles.length < 5) return []
-
-  const points: ZigZagPoint[] = []
-  let lastType: 'HIGH' | 'LOW' | null = null
-  let lastHigh = candles[0].high
-  let lastHighIdx = 0
-  let lastLow = candles[0].low
-  let lastLowIdx = 0
-
-  for (let i = 1; i < candles.length; i++) {
-    const h = candles[i].high
-    const l = candles[i].low
-
-    if (h > lastHigh) {
-      lastHigh = h
-      lastHighIdx = i
-    }
-    if (l < lastLow) {
-      lastLow = l
-      lastLowIdx = i
-    }
-
-    // Check for significant drop from high → confirm high as swing point
-    const dropFromHigh = ((lastHigh - l) / lastHigh) * 100
-    if (dropFromHigh >= deviation && lastType !== 'HIGH') {
-      points.push({ index: lastHighIdx, price: lastHigh, type: 'HIGH' })
-      lastType = 'HIGH'
-      lastLow = l
-      lastLowIdx = i
-    }
-
-    // Check for significant rise from low → confirm low as swing point
-    const riseFromLow = ((h - lastLow) / lastLow) * 100
-    if (riseFromLow >= deviation && lastType !== 'LOW') {
-      points.push({ index: lastLowIdx, price: lastLow, type: 'LOW' })
-      lastType = 'LOW'
-      lastHigh = h
-      lastHighIdx = i
-    }
-  }
-
-  return points
-}
-
-interface ZigZagAnalysis {
-  trend: 'UP' | 'DOWN' | 'NEUTRAL'       // based on last 2 points
-  lastSwingHigh: number
-  lastSwingLow: number
-  nearSwingLow: boolean                    // price near last swing low (buy zone)
-  nearSwingHigh: boolean                   // price near last swing high (sell zone)
-  higherHighs: boolean                     // bullish structure
-  lowerLows: boolean                       // bearish structure
-  swingCount: number
-  confidenceBoost: number                  // how much to add/subtract from confidence
-  reason: string
-}
-
-function analyzeZigZag(candles: OHLCV[], currentPrice: number, action: ScalpAction): ZigZagAnalysis {
-  const deviation = currentPrice > 10000 ? 0.3 : 0.5 // tighter for BTC-like assets
-  const points = calcZigZag(candles, deviation)
-
-  const result: ZigZagAnalysis = {
-    trend: 'NEUTRAL',
-    lastSwingHigh: 0,
-    lastSwingLow: 0,
-    nearSwingLow: false,
-    nearSwingHigh: false,
-    higherHighs: false,
-    lowerLows: false,
-    swingCount: points.length,
-    confidenceBoost: 0,
-    reason: '',
-  }
-
-  if (points.length < 3) return result
-
-  // Get last few swing highs and lows
-  const highs = points.filter(p => p.type === 'HIGH')
-  const lows = points.filter(p => p.type === 'LOW')
-
-  if (highs.length >= 1) result.lastSwingHigh = highs[highs.length - 1].price
-  if (lows.length >= 1) result.lastSwingLow = lows[lows.length - 1].price
-
-  // Structure analysis: higher highs / lower lows
-  if (highs.length >= 2 && lows.length >= 2) {
-    const h1 = highs[highs.length - 2].price
-    const h2 = highs[highs.length - 1].price
-    const l1 = lows[lows.length - 2].price
-    const l2 = lows[lows.length - 1].price
-
-    result.higherHighs = h2 > h1 && l2 > l1  // bullish structure
-    result.lowerLows = h2 < h1 && l2 < l1    // bearish structure
-
-    if (result.higherHighs) result.trend = 'UP'
-    else if (result.lowerLows) result.trend = 'DOWN'
-  }
-
-  // Last point direction
-  const lastPoint = points[points.length - 1]
-  if (lastPoint.type === 'LOW') {
-    // Last confirmed point is a low → price heading up
-    if (result.trend !== 'DOWN') result.trend = 'UP'
-  } else {
-    // Last confirmed point is a high → price heading down
-    if (result.trend !== 'UP') result.trend = 'DOWN'
-  }
-
-  // Proximity to swing levels
-  const proximityPct = 0.3 // 0.3% proximity threshold
-  if (result.lastSwingLow > 0) {
-    result.nearSwingLow = Math.abs(currentPrice - result.lastSwingLow) / currentPrice * 100 < proximityPct
-  }
-  if (result.lastSwingHigh > 0) {
-    result.nearSwingHigh = Math.abs(currentPrice - result.lastSwingHigh) / currentPrice * 100 < proximityPct
-  }
-
-  // === Confidence boost calculation ===
-  const isBuy = action === 'BUY' || action === 'EXIT_SELL'
-  const isSell = action === 'SELL' || action === 'EXIT_BUY'
-
-  if (action === 'WAIT') {
-    result.confidenceBoost = 0
-    return result
-  }
-
-  let boost = 0
-  const reasons: string[] = []
-
-  // Structure alignment: +8
-  if (isBuy && result.higherHighs) { boost += 8; reasons.push('ZZ: قمم وقيعان صاعدة') }
-  else if (isSell && result.lowerLows) { boost += 8; reasons.push('ZZ: قمم وقيعان هابطة') }
-  // Structure against: -8
-  else if (isBuy && result.lowerLows) { boost -= 8; reasons.push('ZZ: الهيكل هابط — ضد الشراء') }
-  else if (isSell && result.higherHighs) { boost -= 8; reasons.push('ZZ: الهيكل صاعد — ضد البيع') }
-
-  // Trend alignment: +5
-  if (isBuy && result.trend === 'UP') { boost += 5; reasons.push('ZZ: الاتجاه صاعد') }
-  else if (isSell && result.trend === 'DOWN') { boost += 5; reasons.push('ZZ: الاتجاه هابط') }
-  // Trend against: -5
-  else if (isBuy && result.trend === 'DOWN') { boost -= 5 }
-  else if (isSell && result.trend === 'UP') { boost -= 5 }
-
-  // Near swing low for buy: +5 (bounce zone)
-  if (isBuy && result.nearSwingLow) { boost += 5; reasons.push('ZZ: السعر عند قاع سابق (منطقة ارتداد)') }
-  // Near swing high for sell: +5 (rejection zone)
-  if (isSell && result.nearSwingHigh) { boost += 5; reasons.push('ZZ: السعر عند قمة سابقة (منطقة رفض)') }
-
-  result.confidenceBoost = Math.max(-15, Math.min(18, boost))
-  result.reason = reasons[0] || ''
-
-  return result
 }
 
 async function getCachedKlines(symbol: string, interval: string, limit: number) {
@@ -247,18 +85,6 @@ interface QuickScalpSignal {
   confidenceLabel: string
   signalSince: string
   signalAgeSeconds: number
-  zigzag: {
-    trend: 'UP' | 'DOWN' | 'NEUTRAL'
-    lastSwingHigh: number
-    lastSwingLow: number
-    nearSwingLow: boolean
-    nearSwingHigh: boolean
-    higherHighs: boolean
-    lowerLows: boolean
-    swingCount: number
-    confidenceBoost: number
-    reason: string
-  }
   reversalWarning: boolean
   reversalReason: string
   timestamp: string
@@ -613,12 +439,6 @@ function analyzeQuickScalp(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'D
     reasons.push('انتظر حتى يتوقف الصعود')
   }
 
-  // === ZigZag Analysis ===
-  const zz = analyzeZigZag(candles, currentPrice, action)
-  if (action !== 'WAIT' && zz.reason) {
-    reasons.push(zz.reason)
-  }
-
   // Add HTF trend info to reasons
   if (action !== 'WAIT' && htfTrend !== 'NEUTRAL') {
     reasons.push(htfTrend === 'UP' ? '📈 الترند العام صاعد (1 ساعة)' : '📉 الترند العام هابط (1 ساعة)')
@@ -745,25 +565,10 @@ function analyzeQuickScalp(candles: OHLCV[], symbol: string, htfTrend: 'UP' | 'D
     confidenceLabel: '',
     signalSince: '',
     signalAgeSeconds: 0,
-    zigzag: {
-      trend: zz.trend,
-      lastSwingHigh: zz.lastSwingHigh,
-      lastSwingLow: zz.lastSwingLow,
-      nearSwingLow: zz.nearSwingLow,
-      nearSwingHigh: zz.nearSwingHigh,
-      higherHighs: zz.higherHighs,
-      lowerLows: zz.lowerLows,
-      swingCount: zz.swingCount,
-      confidenceBoost: zz.confidenceBoost,
-      reason: zz.reason,
-    },
     reversalWarning,
     reversalReason,
     timestamp: new Date().toISOString(),
   }
-
-  // Apply ZigZag confidence boost
-  result.confidence = Math.max(10, Math.min(95, result.confidence + zz.confidenceBoost))
 
   // Set confidence label
   if (result.confidence >= 80) result.confidenceLabel = 'ثقة عالية جداً'
@@ -789,9 +594,10 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
     const interval = searchParams.get('interval') || '15m'
     const symbolParam = searchParams.get('symbol')
+    const category = (searchParams.get('category') || 'major') as CryptoCategory
 
-    // Use specific symbol or all crypto pairs
-    const symbols = symbolParam ? [symbolParam] : CRYPTO_PAIRS
+    // Use specific symbol, category pairs, or default major pairs
+    const symbols = symbolParam ? [symbolParam] : getCategoryPairs(category)
 
     const signals: QuickScalpSignal[] = []
 

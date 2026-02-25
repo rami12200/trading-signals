@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { formatPrice, SIGNAL_PAIRS } from '@/lib/binance'
+import { formatPrice, SIGNAL_PAIRS, CRYPTO_CATEGORIES, CryptoCategory, getCategoryPairs } from '@/lib/binance'
 import { useBinanceWS } from '@/hooks/useBinanceWS'
 import { ProtectedPage } from '@/components/ProtectedPage'
 import { useAuth } from '@/components/AuthProvider'
@@ -39,18 +39,6 @@ interface QuickScalpSignal {
   confidenceLabel: string
   signalSince: string
   signalAgeSeconds: number
-  zigzag: {
-    trend: 'UP' | 'DOWN' | 'NEUTRAL'
-    lastSwingHigh: number
-    lastSwingLow: number
-    nearSwingLow: boolean
-    nearSwingHigh: boolean
-    higherHighs: boolean
-    lowerLows: boolean
-    swingCount: number
-    confidenceBoost: number
-    reason: string
-  }
   reversalWarning: boolean
   reversalReason: string
   timestamp: string
@@ -206,6 +194,7 @@ const timeframes = [
 export default function QuickScalpPage() {
   const { user } = useAuth()
   const [signals, setSignals] = useState<QuickScalpSignal[]>([])
+  const [category, setCategory] = useState<CryptoCategory>('major')
   const [timeframe, setTimeframe] = useState('15m')
   const [loading, setLoading] = useState(true)
   const [lastUpdate, setLastUpdate] = useState('')
@@ -228,7 +217,7 @@ export default function QuickScalpPage() {
   const [customLotInput, setCustomLotInput] = useState<Record<string, string>>({})
 
   // WebSocket for live prices — stable reference to avoid reconnects
-  const wsSymbols = useMemo(() => SIGNAL_PAIRS, [])
+  const wsSymbols = useMemo(() => getCategoryPairs(category), [category])
   const { prices: livePrices, connected: wsConnected } = useBinanceWS(wsSymbols)
 
   // Load trades + history + favorites + lot sizes from localStorage on mount
@@ -366,7 +355,7 @@ export default function QuickScalpPage() {
   // REST API for signals/indicators (every 15s — WebSocket handles live prices)
   const fetchSignals = useCallback(async () => {
     try {
-      const res = await fetch(`/api/quickscalp?interval=${timeframe}`)
+      const res = await fetch(`/api/quickscalp?interval=${timeframe}&category=${category}`)
       const json = await res.json()
       if (json.success) {
         const newSignals = json.data.signals as QuickScalpSignal[]
@@ -405,7 +394,7 @@ export default function QuickScalpPage() {
       console.error(e)
     }
     setLoading(false)
-  }, [timeframe, soundEnabled, showFavOnly, favorites]) // Display-only dependencies
+  }, [timeframe, category, soundEnabled, showFavOnly, favorites]) // Display-only dependencies
 
   useEffect(() => {
     setLoading(true)
@@ -583,6 +572,23 @@ export default function QuickScalpPage() {
             <span className="text-xs text-neutral-500">تحديث: {lastUpdate}</span>
           )}
         </div>
+      </div>
+
+      {/* Category Filter */}
+      <div className="flex gap-2 mb-4 overflow-x-auto pb-1" dir="rtl">
+        {(Object.entries(CRYPTO_CATEGORIES) as [CryptoCategory, { label: string; pairs: string[] }][]).map(([key, cat]) => (
+          <button
+            key={key}
+            onClick={() => { setCategory(key); setLoading(true) }}
+            className={`px-4 py-2 rounded-xl text-xs font-medium whitespace-nowrap transition-all ${
+              category === key
+                ? 'bg-accent text-white shadow-lg shadow-accent/20'
+                : 'bg-surface border border-white/10 text-neutral-400 hover:text-white'
+            }`}
+          >
+            {cat.label} ({cat.pairs.length})
+          </button>
+        ))}
       </div>
 
       {/* Strategy Explanation */}
@@ -1103,52 +1109,6 @@ export default function QuickScalpPage() {
                       </div>
                     </div>
 
-                    {/* ZigZag */}
-                    {sig.zigzag && sig.zigzag.swingCount >= 3 && (
-                      <div className="p-3 bg-background/50 rounded-xl col-span-2 md:col-span-4">
-                        <div className="flex items-center justify-between mb-1">
-                          <div className="text-[10px] text-neutral-500">ZigZag — هيكل السعر</div>
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                            sig.zigzag.confidenceBoost > 0 ? 'bg-bullish/20 text-bullish' :
-                            sig.zigzag.confidenceBoost < 0 ? 'bg-bearish/20 text-bearish' :
-                            'bg-white/10 text-neutral-400'
-                          }`}>
-                            {sig.zigzag.confidenceBoost > 0 ? `+${sig.zigzag.confidenceBoost}%` :
-                             sig.zigzag.confidenceBoost < 0 ? `${sig.zigzag.confidenceBoost}%` : '0%'} ثقة
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-3 flex-wrap">
-                          <span className={`text-sm font-bold ${
-                            sig.zigzag.trend === 'UP' ? 'text-bullish' :
-                            sig.zigzag.trend === 'DOWN' ? 'text-bearish' : 'text-neutral-400'
-                          }`}>
-                            {sig.zigzag.trend === 'UP' ? '📈 صاعد' :
-                             sig.zigzag.trend === 'DOWN' ? '📉 هابط' : '➡️ محايد'}
-                          </span>
-                          {sig.zigzag.higherHighs && (
-                            <span className="text-[10px] bg-bullish/10 text-bullish px-2 py-0.5 rounded-full">قمم وقيعان صاعدة</span>
-                          )}
-                          {sig.zigzag.lowerLows && (
-                            <span className="text-[10px] bg-bearish/10 text-bearish px-2 py-0.5 rounded-full">قمم وقيعان هابطة</span>
-                          )}
-                          {sig.zigzag.nearSwingLow && (
-                            <span className="text-[10px] bg-bullish/10 text-bullish px-2 py-0.5 rounded-full">عند قاع سابق</span>
-                          )}
-                          {sig.zigzag.nearSwingHigh && (
-                            <span className="text-[10px] bg-bearish/10 text-bearish px-2 py-0.5 rounded-full">عند قمة سابقة</span>
-                          )}
-                        </div>
-                        <div className="flex gap-4 mt-1.5 text-[9px] text-neutral-500 font-mono">
-                          {sig.zigzag.lastSwingHigh > 0 && (
-                            <span>قمة: <span className="text-bearish">${sig.zigzag.lastSwingHigh.toFixed(2)}</span></span>
-                          )}
-                          {sig.zigzag.lastSwingLow > 0 && (
-                            <span>قاع: <span className="text-bullish">${sig.zigzag.lastSwingLow.toFixed(2)}</span></span>
-                          )}
-                          <span>نقاط: {sig.zigzag.swingCount}</span>
-                        </div>
-                      </div>
-                    )}
                   </div>
 
                   {/* Lot Size Selector + Trade Action Buttons */}

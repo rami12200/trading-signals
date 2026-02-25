@@ -93,29 +93,68 @@ export async function getKlines(
   }
 }
 
-// Crypto pairs available on Binance
-export const CRYPTO_PAIRS = [
-  'BTCUSDT',
-  'ETHUSDT',
-  'BNBUSDT',
-  'SOLUSDT',
-  'XRPUSDT',
-  'ADAUSDT',
-  'DOGEUSDT',
-  'AVAXUSDT',
-  'DOTUSDT',
-  'LINKUSDT',
-]
+// === Crypto categories matching Exness platform ===
+export type CryptoCategory = 'all' | 'major' | 'defi' | 'layer1' | 'layer2' | 'meme' | 'gaming'
 
-// Top pairs for signal generation
-export const SIGNAL_PAIRS = [
-  'BTCUSDT',
-  'ETHUSDT',
-  'SOLUSDT',
-  'BNBUSDT',
-  'XRPUSDT',
-  'ADAUSDT',
-]
+export const CRYPTO_CATEGORIES: Record<CryptoCategory, { label: string; pairs: string[] }> = {
+  all: { label: 'الكل', pairs: [] }, // filled dynamically below
+  major: {
+    label: 'رئيسية',
+    pairs: [
+      'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'ADAUSDT',
+      'DOTUSDT', 'AVAXUSDT', 'LINKUSDT', 'LTCUSDT',
+    ],
+  },
+  defi: {
+    label: 'DeFi',
+    pairs: [
+      'UNIUSDT', 'AAVEUSDT', 'MKRUSDT', 'COMPUSDT', 'SNXUSDT',
+      'CRVUSDT', 'SUSHIUSDT', 'DYDXUSDT', '1INCHUSDT', 'LDOUSDT',
+    ],
+  },
+  layer1: {
+    label: 'Layer 1',
+    pairs: [
+      'APTUSDT', 'SUIUSDT', 'NEARUSDT', 'ATOMUSDT', 'ALGOUSDT',
+      'FTMUSDT', 'ICPUSDT', 'TONUSDT', 'SEIUSDT', 'INJUSDT',
+    ],
+  },
+  layer2: {
+    label: 'Layer 2',
+    pairs: [
+      'MATICUSDT', 'ARBUSDT', 'OPUSDT', 'STXUSDT', 'IMXUSDT',
+    ],
+  },
+  meme: {
+    label: 'Meme',
+    pairs: [
+      'DOGEUSDT', 'SHIBUSDT', 'PEPEUSDT', 'FLOKIUSDT', 'WIFUSDT',
+    ],
+  },
+  gaming: {
+    label: 'Gaming',
+    pairs: [
+      'AXSUSDT', 'SANDUSDT', 'MANAUSDT', 'GALAUSDT', 'ENJUSDT',
+    ],
+  },
+}
+
+// Build "all" category from all others (deduplicated)
+CRYPTO_CATEGORIES.all.pairs = Array.from(
+  new Set(
+    Object.entries(CRYPTO_CATEGORIES)
+      .filter(([k]) => k !== 'all')
+      .flatMap(([, v]) => v.pairs)
+  )
+)
+
+// Legacy exports for backward compatibility
+export const CRYPTO_PAIRS = CRYPTO_CATEGORIES.all.pairs
+export const SIGNAL_PAIRS = CRYPTO_CATEGORIES.major.pairs.slice(0, 6)
+
+export function getCategoryPairs(category: CryptoCategory): string[] {
+  return CRYPTO_CATEGORIES[category]?.pairs || CRYPTO_CATEGORIES.all.pairs
+}
 
 // Format symbol for display: BTCUSDT -> BTC/USDT
 export function formatSymbol(symbol: string): string {
