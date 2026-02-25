@@ -104,7 +104,7 @@ export async function GET(req: Request) {
 
           const analysis = analyzeICT(mainCandles, htfCandles)
 
-          if (analysis.action === 'WAIT' && analysis.confidence < 30) return null
+          // نظهر كل العملات حتى اللي حالتها انتظر
 
           const lastPrice = mainKlines[mainKlines.length - 1].close
           const displaySymbol = source === 'databento'
