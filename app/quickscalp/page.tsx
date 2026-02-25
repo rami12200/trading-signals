@@ -580,7 +580,7 @@ export default function QuickScalpPage() {
         {(Object.entries(CRYPTO_CATEGORIES) as [CryptoCategory, { label: string; pairs: string[] }][]).map(([key, cat]) => (
           <button
             key={key}
-            onClick={() => { setCategory(key); setLoading(true) }}
+            onClick={() => { setCategory(key); setLoading(true); if (showFavOnly) { setShowFavOnly(false); saveShowFavOnly(false) } }}
             className={`px-4 py-2 rounded-xl text-xs font-medium whitespace-nowrap transition-all ${
               category === key
                 ? 'bg-accent text-white shadow-lg shadow-accent/20'
@@ -878,7 +878,7 @@ export default function QuickScalpPage() {
         <div className="card text-center py-20">
           <p className="text-neutral-400 text-lg">لا توجد بيانات حالياً</p>
           <p className="text-neutral-500 text-sm mt-2">
-            {showFavOnly ? 'لم تختر أي عملات مفضلة، أو لا توجد إشارات لها' : isCrypto ? 'جاري الاتصال بـ Binance...' : 'جاري جلب البيانات من Twelve Data...'}
+            {showFavOnly ? 'لم تختر أي عملات مفضلة في هذه الفئة — أوقف فلتر المفضلة' : isCrypto ? 'جاري الاتصال بـ Binance...' : 'جاري جلب البيانات من Twelve Data — تأكد إن TWELVEDATA_API_KEY مضاف على السيرفر'}
           </p>
         </div>
       ) : (
