@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getKlines, formatSymbol, getCategoryPairs, getCategorySource, CryptoCategory } from '@/lib/binance'
-import { getFinnhubKlines } from '@/lib/finnhub'
+import { getDatabentoKlines } from '@/lib/databento'
 import {
   parseKlines,
   calcEMA,
@@ -42,17 +42,17 @@ function isRateLimited(ip: string): boolean {
   return false
 }
 
-const FINNHUB_CACHE_TTL = 30_000 // 30 seconds for Finnhub (60 req/min is generous)
+const DATABENTO_CACHE_TTL = 120_000 // دقيقتين كاش لـ Databento (حفاظاً على الرصيد)
 
-async function getCachedKlines(symbol: string, interval: string, limit: number, source: 'binance' | 'finnhub' = 'binance') {
+async function getCachedKlines(symbol: string, interval: string, limit: number, source: 'binance' | 'databento' = 'binance') {
   const key = `${source}-${symbol}-${interval}-${limit}`
   const now = Date.now()
-  const ttl = source === 'finnhub' ? FINNHUB_CACHE_TTL : CACHE_TTL
+  const ttl = source === 'databento' ? DATABENTO_CACHE_TTL : CACHE_TTL
   if (cache[key] && now - cache[key].timestamp < ttl) {
     return cache[key].data
   }
-  const data = source === 'finnhub'
-    ? await getFinnhubKlines(symbol, interval, limit)
+  const data = source === 'databento'
+    ? await getDatabentoKlines(symbol, interval, limit)
     : await getKlines(symbol, interval, limit)
   cache[key] = { data, timestamp: now }
   return data

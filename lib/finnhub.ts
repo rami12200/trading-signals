@@ -3,7 +3,7 @@
 // 60 requests/minute (free plan) — much better than Twelve Data's 8/min
 // ============================================
 
-const FINNHUB_BASE = 'https://finnhub.io/api/v1'
+const FINNHUB_BASE = 'https://api.finnhub.io/api/v1'
 
 // Map our intervals to Finnhub resolutions
 const RESOLUTION_MAP: Record<string, string> = {

@@ -566,7 +566,7 @@ export default function QuickScalpPage() {
           <div className="flex items-center gap-1.5">
             <span className={`inline-block w-2 h-2 rounded-full ${isCrypto ? (wsConnected ? 'bg-bullish animate-pulse' : 'bg-bearish') : 'bg-accent animate-pulse'}`} />
             <span className="text-[10px] text-neutral-500">
-              {isCrypto ? (wsConnected ? 'لحظي' : 'غير متصل') : 'Finnhub API'}
+              {isCrypto ? (wsConnected ? 'لحظي' : 'غير متصل') : 'Databento'}
             </span>
           </div>
           {lastUpdate && (
@@ -642,7 +642,7 @@ export default function QuickScalpPage() {
         <div className="flex items-start gap-3 text-xs">
           <span className="text-yellow-400 text-lg leading-none">⚠️</span>
           <div className="text-neutral-400">
-            <strong className="text-yellow-400">الأسعار تقريبية</strong> — البيانات من {isCrypto ? 'Binance وقد تختلف عن سعر Exness بـ $10-$70' : 'Finnhub'}.
+            <strong className="text-yellow-400">الأسعار تقريبية</strong> — البيانات من {isCrypto ? 'Binance وقد تختلف عن سعر Exness بـ $10-$70' : 'Databento'}.
             اعتمد على <strong className="text-white">اتجاه الإشارة</strong> (اشترِ/بِع/اخرج) وادخل بالسعر الموجود على Exness.
             {isCrypto && 'عدّل الوقف والهدف بنفس الفرق.'}
           </div>
@@ -878,7 +878,7 @@ export default function QuickScalpPage() {
         <div className="card text-center py-20">
           <p className="text-neutral-400 text-lg">لا توجد بيانات حالياً</p>
           <p className="text-neutral-500 text-sm mt-2">
-            {showFavOnly ? 'لم تختر أي عملات مفضلة في هذه الفئة — أوقف فلتر المفضلة' : isCrypto ? 'جاري الاتصال بـ Binance...' : 'جاري جلب البيانات من Finnhub...'}
+            {showFavOnly ? 'لم تختر أي عملات مفضلة في هذه الفئة — أوقف فلتر المفضلة' : isCrypto ? 'جاري الاتصال بـ Binance...' : 'جاري جلب البيانات من Databento...'}
           </p>
         </div>
       ) : (
