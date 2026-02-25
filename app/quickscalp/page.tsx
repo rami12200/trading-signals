@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { formatPrice, SIGNAL_PAIRS, CRYPTO_CATEGORIES, CryptoCategory, getCategoryPairs } from '@/lib/binance'
+import { formatPrice, SIGNAL_PAIRS, CRYPTO_CATEGORIES, CryptoCategory, getCategoryPairs, getCategorySource } from '@/lib/binance'
 import { useBinanceWS } from '@/hooks/useBinanceWS'
 import { ProtectedPage } from '@/components/ProtectedPage'
 import { useAuth } from '@/components/AuthProvider'
@@ -216,8 +216,9 @@ export default function QuickScalpPage() {
   const [lotSizes, setLotSizes] = useState<Record<string, number>>({})
   const [customLotInput, setCustomLotInput] = useState<Record<string, string>>({})
 
-  // WebSocket for live prices — stable reference to avoid reconnects
-  const wsSymbols = useMemo(() => getCategoryPairs(category), [category])
+  // WebSocket for live prices — only for Binance (crypto) categories
+  const isCrypto = getCategorySource(category) === 'binance'
+  const wsSymbols = useMemo(() => isCrypto ? getCategoryPairs(category) : [], [category, isCrypto])
   const { prices: livePrices, connected: wsConnected } = useBinanceWS(wsSymbols)
 
   // Load trades + history + favorites + lot sizes from localStorage on mount
@@ -563,9 +564,9 @@ export default function QuickScalpPage() {
             {soundEnabled ? '🔔' : '🔕'}
           </button>
           <div className="flex items-center gap-1.5">
-            <span className={`inline-block w-2 h-2 rounded-full ${wsConnected ? 'bg-bullish animate-pulse' : 'bg-bearish'}`} />
+            <span className={`inline-block w-2 h-2 rounded-full ${isCrypto ? (wsConnected ? 'bg-bullish animate-pulse' : 'bg-bearish') : 'bg-accent animate-pulse'}`} />
             <span className="text-[10px] text-neutral-500">
-              {wsConnected ? 'لحظي' : 'غير متصل'}
+              {isCrypto ? (wsConnected ? 'لحظي' : 'غير متصل') : 'REST API'}
             </span>
           </div>
           {lastUpdate && (
@@ -641,9 +642,9 @@ export default function QuickScalpPage() {
         <div className="flex items-start gap-3 text-xs">
           <span className="text-yellow-400 text-lg leading-none">⚠️</span>
           <div className="text-neutral-400">
-            <strong className="text-yellow-400">الأسعار تقريبية</strong> — البيانات من Binance وقد تختلف عن سعر Exness بـ $10-$70.
+            <strong className="text-yellow-400">الأسعار تقريبية</strong> — البيانات من {isCrypto ? 'Binance وقد تختلف عن سعر Exness بـ $10-$70' : 'Twelve Data'}.
             اعتمد على <strong className="text-white">اتجاه الإشارة</strong> (اشترِ/بِع/اخرج) وادخل بالسعر الموجود على Exness.
-            عدّل الوقف والهدف بنفس الفرق.
+            {isCrypto && 'عدّل الوقف والهدف بنفس الفرق.'}
           </div>
         </div>
       </div>
@@ -877,7 +878,7 @@ export default function QuickScalpPage() {
         <div className="card text-center py-20">
           <p className="text-neutral-400 text-lg">لا توجد بيانات حالياً</p>
           <p className="text-neutral-500 text-sm mt-2">
-            {showFavOnly ? 'لم تختر أي عملات مفضلة، أو لا توجد إشارات لها' : 'جاري الاتصال بـ Binance...'}
+            {showFavOnly ? 'لم تختر أي عملات مفضلة، أو لا توجد إشارات لها' : isCrypto ? 'جاري الاتصال بـ Binance...' : 'جاري جلب البيانات من Twelve Data...'}
           </p>
         </div>
       ) : (
