@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "AlQabas Pro"
 #property link      "https://qabas.pro"
-#property version   "1.05"
+#property version   "1.06"
 #property description "AlQabas EA - Auto-detect broker symbols & execute trades"
 #property strict
 
@@ -22,9 +22,11 @@ input int      MaxTrades    = 5;                       // أقصى عدد صفق
 input int      Slippage     = 30;                      // الانزلاق السعري (نقاط)
 input int      MagicNumber  = 202601;                  // الرقم السحري للصفقات
 input bool     UseTrailing  = true;                    // تفعيل الوقف المتحرك
-input double   TrailingActivateProfit = 2.0;           // ابدأ الوقف المتحرك بعد ربح ($)
-input double   TrailingDistPercent = 0.03;             // مسافة الوقف المتحرك (% من السعر)
-input int      TrailingStopPoints = 0;                 // مسافة ثابتة (نقاط) - 0 = تلقائي
+input double   BreakevenATR = 1.0;                     // أمّن الدخول بعد (x ATR) ربح
+input double   TrailingStartATR = 1.5;                 // ابدأ الوقف المتحرك بعد (x ATR) ربح
+input double   TrailingDistATR = 0.5;                  // مسافة الوقف المتحرك (x ATR)
+input int      ATR_Period = 14;                        // فترة ATR
+input ENUM_TIMEFRAMES ATR_Timeframe = PERIOD_H1;      // الإطار الزمني لـ ATR
 
 //--- إعدادات الرموز
 input group "=== Symbol Settings ==="
@@ -104,7 +106,27 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
-//| وظيفة الوقف المتحرك (Trailing Stop) — يعمل على الصفقات المفتوحة |
+//| حساب ATR لرمز معين                                               |
+//+------------------------------------------------------------------+
+double CalcATR(string symbol, ENUM_TIMEFRAMES tf, int period)
+{
+   double atrBuffer[];
+   int handle = iATR(symbol, tf, period);
+   if(handle == INVALID_HANDLE) return 0;
+   
+   if(CopyBuffer(handle, 0, 0, 1, atrBuffer) <= 0)
+   {
+      IndicatorRelease(handle);
+      return 0;
+   }
+   IndicatorRelease(handle);
+   return atrBuffer[0];
+}
+
+//+------------------------------------------------------------------+
+//| وظيفة الوقف المتحرك — مرحلتين: Breakeven ثم Trailing             |
+//| المرحلة 1: لما الربح يوصل BreakevenATR × ATR → وقف = سعر الدخول  |
+//| المرحلة 2: لما الربح يوصل TrailingStartATR × ATR → وقف يتحرك     |
 //+------------------------------------------------------------------+
 void CheckTrailingStop()
 {
@@ -119,11 +141,11 @@ void CheckTrailingStop()
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
       double sl        = PositionGetDouble(POSITION_SL);
       double tp        = PositionGetDouble(POSITION_TP);
-      double volume    = PositionGetDouble(POSITION_VOLUME);
       long   posType   = PositionGetInteger(POSITION_TYPE);
       
       double point  = SymbolInfoDouble(symbol, SYMBOL_POINT);
       int    digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+      double spread = SymbolInfoDouble(symbol, SYMBOL_ASK) - SymbolInfoDouble(symbol, SYMBOL_BID);
       
       if(point == 0) continue;
       
@@ -132,49 +154,67 @@ void CheckTrailingStop()
                      ? SymbolInfoDouble(symbol, SYMBOL_BID) 
                      : SymbolInfoDouble(symbol, SYMBOL_ASK);
       
-      // حساب الربح الحالي بالدولار
-      double profit = PositionGetDouble(POSITION_PROFIT);
+      // حساب ATR
+      double atr = CalcATR(symbol, ATR_Timeframe, ATR_Period);
+      if(atr <= 0) continue;
       
-      // لا نبدأ الوقف المتحرك إلا بعد تحقيق الحد الأدنى من الربح
-      if(profit < TrailingActivateProfit) continue;
+      // حساب المسافة من سعر الدخول
+      double priceDist = 0;
+      if(posType == POSITION_TYPE_BUY)
+         priceDist = price - openPrice;
+      else if(posType == POSITION_TYPE_SELL)
+         priceDist = openPrice - price;
+      else continue;
       
-      // حساب مسافة الوقف المتحرك
-      double trailDist;
-      if(TrailingStopPoints > 0)
-      {
-         // المستخدم حدد مسافة ثابتة بالنقاط
-         trailDist = TrailingStopPoints * point;
-      }
-      else
-      {
-         // مسافة نسبية تلقائية حسب سعر الزوج
-         // TrailingDistPercent = 0.03 يعني 0.03%
-         // BTCUSD ($97000): 0.03% = $29.1 → مسافة معقولة
-         // EURUSD ($1.08):  0.03% = $0.000324 → ~3.2 pips → معقولة
-         // XAUUSD ($2650):  0.03% = $0.795 → معقولة
-         trailDist = price * TrailingDistPercent / 100.0;
-      }
-      
-      // تقريب المسافة لأقرب نقطة
-      trailDist = MathMax(trailDist, point * 5); // حد أدنى 5 نقاط
+      // الحدود
+      double breakevenDist  = atr * BreakevenATR;    // مثلاً 1.0 × ATR
+      double trailStartDist = atr * TrailingStartATR; // مثلاً 1.5 × ATR
+      double trailDist      = atr * TrailingDistATR;  // مثلاً 0.5 × ATR
+      trailDist = MathMax(trailDist, point * 10);     // حد أدنى 10 نقاط
       
       double newSL = 0;
+      string phase = "";
       
       if(posType == POSITION_TYPE_BUY)
       {
-         newSL = NormalizeDouble(price - trailDist, digits);
-         
-         // الوقف الجديد لازم يكون أعلى من الحالي وأعلى من سعر الدخول
-         if(newSL <= sl && sl != 0) continue;
-         if(newSL <= openPrice) continue;
+         if(priceDist >= trailStartDist)
+         {
+            // المرحلة 2: Trailing — الوقف يتحرك مع السعر
+            newSL = NormalizeDouble(price - trailDist, digits);
+            phase = "TRAIL";
+            // لازم يكون أعلى من الوقف الحالي
+            if(newSL <= sl && sl != 0) continue;
+            // ولازم يكون فوق سعر الدخول
+            if(newSL <= openPrice) continue;
+         }
+         else if(priceDist >= breakevenDist)
+         {
+            // المرحلة 1: Breakeven — أمّن سعر الدخول
+            newSL = NormalizeDouble(openPrice + spread + point, digits);
+            phase = "BE";
+            // لا نعدل لو الوقف أصلاً عند الدخول أو أعلى
+            if(sl >= openPrice && sl != 0) continue;
+         }
+         else continue; // ما وصلنا لأي مرحلة بعد
       }
       else if(posType == POSITION_TYPE_SELL)
       {
-         newSL = NormalizeDouble(price + trailDist, digits);
-         
-         // الوقف الجديد لازم يكون أقل من الحالي وأقل من سعر الدخول
-         if(newSL >= sl && sl != 0) continue;
-         if(newSL >= openPrice) continue;
+         if(priceDist >= trailStartDist)
+         {
+            // المرحلة 2: Trailing
+            newSL = NormalizeDouble(price + trailDist, digits);
+            phase = "TRAIL";
+            if(newSL >= sl && sl != 0) continue;
+            if(newSL >= openPrice) continue;
+         }
+         else if(priceDist >= breakevenDist)
+         {
+            // المرحلة 1: Breakeven
+            newSL = NormalizeDouble(openPrice - spread - point, digits);
+            phase = "BE";
+            if(sl <= openPrice && sl != 0 && sl > 0) continue;
+         }
+         else continue;
       }
       else continue;
       
@@ -192,14 +232,16 @@ void CheckTrailingStop()
       
       if(OrderSend(request, result))
       {
-         Print("Trailing SL updated: ", symbol, " ticket=", ticket, 
-               " profit=$", DoubleToString(profit, 2),
+         Print(phase, ": ", symbol, " ticket=", ticket,
+               " open=", DoubleToString(openPrice, digits),
+               " price=", DoubleToString(price, digits),
                " newSL=", DoubleToString(newSL, digits),
-               " dist=", DoubleToString(trailDist, digits));
+               " ATR=", DoubleToString(atr, digits),
+               " dist=", DoubleToString(priceDist, digits));
       }
       else
       {
-         Print("Failed to trail ", symbol, " ticket=", ticket, " Error: ", GetLastError());
+         Print("Failed to ", phase, " ", symbol, " ticket=", ticket, " Error: ", GetLastError());
       }
    }
 }
