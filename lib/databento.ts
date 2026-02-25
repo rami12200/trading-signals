@@ -121,13 +121,13 @@ export async function getDatabentoKlines(
   const rawLimit = getRawLimit(interval, limit)
   const aggFactor = getAggFactor(interval)
 
-  // حساب التاريخ — end = ساعة قبل الآن عشان ما نتجاوز آخر بيانات متاحة
+  // حساب التاريخ — end = بداية اليوم UTC عشان ما نتجاوز آخر بيانات متاحة
+  // Databento بيانات تاريخية — آخر بيانات متاحة تكون نهاية آخر يوم تداول مكتمل
   const now = new Date()
   const daysBack = interval === '1d' || interval === '1w' ? 365 : 10
   const start = new Date(now.getTime() - daysBack * 24 * 60 * 60 * 1000)
-  const safeEnd = new Date(now.getTime() - 60 * 60 * 1000) // ساعة قبل الآن
   const startStr = start.toISOString().split('T')[0]
-  const endStr = safeEnd.toISOString()
+  const endStr = now.toISOString().split('T')[0] // بداية اليوم فقط (بدون وقت)
 
   try {
     const params = new URLSearchParams({

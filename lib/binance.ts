@@ -95,7 +95,7 @@ export async function getKlines(
 
 // === Asset categories — Binance (crypto) + Twelve Data (stocks, forex, metals) ===
 export type DataSource = 'binance' | 'databento'
-export type AssetCategory = 'major' | 'defi' | 'layer1' | 'layer2' | 'meme' | 'gaming' | 'stocks' | 'forex' | 'metals'
+export type AssetCategory = 'major' | 'defi' | 'layer1' | 'layer2' | 'meme' | 'gaming' | 'stocks'
 
 export interface CategoryConfig {
   label: string
@@ -159,23 +159,7 @@ export const ASSET_CATEGORIES: Record<AssetCategory, CategoryConfig> = {
       'JPM', 'V', 'JNJ', 'WMT', 'HD', 'INTC', 'IBM', 'COST',
     ],
   },
-  // ---- Forex (Databento) ----
-  forex: {
-    label: 'فوركس',
-    source: 'databento',
-    pairs: [
-      'EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF',
-      'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP',
-    ],
-  },
-  // ---- Metals (Databento) ----
-  metals: {
-    label: 'معادن',
-    source: 'databento',
-    pairs: [
-      'XAU/USD', 'XAG/USD',
-    ],
-  },
+  // فوركس ومعادن: Databento GLBX.MDP3 يحتاج اشتراك مدفوع — معطلة مؤقتاً
 }
 
 // Legacy type alias for backward compatibility
