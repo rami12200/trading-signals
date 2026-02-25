@@ -40,8 +40,12 @@ export default function ICTPage() {
   const [favorites, setFavorites] = useState<string[]>([])
   const [showFavOnly, setShowFavOnly] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(false)
+  const [executingTrade, setExecutingTrade] = useState<string | null>(null)
+  const [executedTrades, setExecutedTrades] = useState<Record<string, boolean>>({})
   const prevSignalsRef = useRef<Record<string, string>>({})
   const audioRef = useRef<HTMLAudioElement | null>(null)
+
+  const getLotSize = (symbol: string) => user?.auto_trade_lot_size ?? 0.1
 
   const isCrypto = ['major', 'defi', 'layer1', 'layer2', 'meme', 'gaming'].includes(category)
   const pairs = getCategoryPairs(category)
@@ -386,6 +390,62 @@ export default function ICTPage() {
                     />
                   </div>
                 </div>
+
+                {/* زر تنفيذ MT5 */}
+                {sig.action !== 'WAIT' && (
+                  <div className="mt-4 pt-3 border-t border-white/5">
+                    {executedTrades[sig.symbol] ? (
+                      <div className="px-6 py-3 rounded-xl font-bold text-sm text-center bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                        ✅ تم إرسال الأمر لـ MT5
+                      </div>
+                    ) : (
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation()
+                          setExecutingTrade(sig.symbol)
+                          try {
+                            const res = await fetch('/api/signals/execute', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({
+                                symbol: sig.symbol,
+                                action: sig.action,
+                                entry: sig.entry,
+                                stopLoss: sig.stopLoss,
+                                takeProfit: sig.takeProfit1,
+                                lotSize: getLotSize(sig.symbol),
+                                api_key: user?.api_key,
+                              }),
+                            })
+                            const data = await res.json()
+                            if (data.success) {
+                              setExecutedTrades((prev) => ({ ...prev, [sig.symbol]: true }))
+                              setTimeout(() => setExecutedTrades((prev) => ({ ...prev, [sig.symbol]: false })), 10000)
+                            } else {
+                              alert('فشل إرسال الأمر: ' + (data.error || 'خطأ غير معروف'))
+                            }
+                          } catch {
+                            alert('فشل الاتصال بالسيرفر')
+                          } finally {
+                            setExecutingTrade(null)
+                          }
+                        }}
+                        disabled={executingTrade === sig.symbol}
+                        className={`w-full px-6 py-3 rounded-xl font-bold text-sm text-center transition-all ${
+                          sig.action === 'BUY'
+                            ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/30'
+                            : 'bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-500/30'
+                        } ${executingTrade === sig.symbol ? 'opacity-50 cursor-wait' : ''}`}
+                      >
+                        {executingTrade === sig.symbol
+                          ? '⏳ جاري الإرسال...'
+                          : sig.action === 'BUY'
+                            ? `🟢 نفّذ شراء على MT5 (${getLotSize(sig.symbol)} لوت)`
+                            : `🔴 نفّذ بيع على MT5 (${getLotSize(sig.symbol)} لوت)`}
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>
