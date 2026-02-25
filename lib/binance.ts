@@ -93,13 +93,21 @@ export async function getKlines(
   }
 }
 
-// === Crypto categories matching Exness platform ===
-export type CryptoCategory = 'all' | 'major' | 'defi' | 'layer1' | 'layer2' | 'meme' | 'gaming'
+// === Asset categories — Binance (crypto) + Twelve Data (stocks, forex, metals) ===
+export type DataSource = 'binance' | 'twelvedata'
+export type AssetCategory = 'major' | 'defi' | 'layer1' | 'layer2' | 'meme' | 'gaming' | 'stocks' | 'forex' | 'metals'
 
-export const CRYPTO_CATEGORIES: Record<CryptoCategory, { label: string; pairs: string[] }> = {
-  all: { label: 'الكل', pairs: [] }, // filled dynamically below
+export interface CategoryConfig {
+  label: string
+  source: DataSource
+  pairs: string[]
+}
+
+export const ASSET_CATEGORIES: Record<AssetCategory, CategoryConfig> = {
+  // ---- Crypto (Binance) ----
   major: {
-    label: 'رئيسية',
+    label: 'كربتو رئيسية',
+    source: 'binance',
     pairs: [
       'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'ADAUSDT',
       'DOTUSDT', 'AVAXUSDT', 'LINKUSDT', 'LTCUSDT',
@@ -107,6 +115,7 @@ export const CRYPTO_CATEGORIES: Record<CryptoCategory, { label: string; pairs: s
   },
   defi: {
     label: 'DeFi',
+    source: 'binance',
     pairs: [
       'UNIUSDT', 'AAVEUSDT', 'MKRUSDT', 'COMPUSDT', 'SNXUSDT',
       'CRVUSDT', 'SUSHIUSDT', 'DYDXUSDT', '1INCHUSDT', 'LDOUSDT',
@@ -114,6 +123,7 @@ export const CRYPTO_CATEGORIES: Record<CryptoCategory, { label: string; pairs: s
   },
   layer1: {
     label: 'Layer 1',
+    source: 'binance',
     pairs: [
       'APTUSDT', 'SUIUSDT', 'NEARUSDT', 'ATOMUSDT', 'ALGOUSDT',
       'FTMUSDT', 'ICPUSDT', 'TONUSDT', 'SEIUSDT', 'INJUSDT',
@@ -121,39 +131,70 @@ export const CRYPTO_CATEGORIES: Record<CryptoCategory, { label: string; pairs: s
   },
   layer2: {
     label: 'Layer 2',
+    source: 'binance',
     pairs: [
       'MATICUSDT', 'ARBUSDT', 'OPUSDT', 'STXUSDT', 'IMXUSDT',
     ],
   },
   meme: {
     label: 'Meme',
+    source: 'binance',
     pairs: [
       'DOGEUSDT', 'SHIBUSDT', 'PEPEUSDT', 'FLOKIUSDT', 'WIFUSDT',
     ],
   },
   gaming: {
     label: 'Gaming',
+    source: 'binance',
     pairs: [
       'AXSUSDT', 'SANDUSDT', 'MANAUSDT', 'GALAUSDT', 'ENJUSDT',
     ],
   },
+  // ---- Stocks (Twelve Data) ----
+  stocks: {
+    label: 'أسهم أمريكية',
+    source: 'twelvedata',
+    pairs: [
+      'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA',
+      'JPM', 'V', 'JNJ', 'WMT', 'HD', 'INTC', 'IBM', 'COST',
+    ],
+  },
+  // ---- Forex (Twelve Data) ----
+  forex: {
+    label: 'فوركس',
+    source: 'twelvedata',
+    pairs: [
+      'EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF',
+      'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP',
+    ],
+  },
+  // ---- Metals (Twelve Data) ----
+  metals: {
+    label: 'معادن',
+    source: 'twelvedata',
+    pairs: [
+      'XAU/USD', 'XAG/USD',
+    ],
+  },
 }
 
-// Build "all" category from all others (deduplicated)
-CRYPTO_CATEGORIES.all.pairs = Array.from(
-  new Set(
-    Object.entries(CRYPTO_CATEGORIES)
-      .filter(([k]) => k !== 'all')
-      .flatMap(([, v]) => v.pairs)
-  )
+// Legacy type alias for backward compatibility
+export type CryptoCategory = AssetCategory
+export const CRYPTO_CATEGORIES = ASSET_CATEGORIES
+
+// All crypto pairs (Binance only) — deduplicated
+const cryptoCats: AssetCategory[] = ['major', 'defi', 'layer1', 'layer2', 'meme', 'gaming']
+export const CRYPTO_PAIRS = Array.from(
+  new Set(cryptoCats.flatMap(k => ASSET_CATEGORIES[k].pairs))
 )
+export const SIGNAL_PAIRS = ASSET_CATEGORIES.major.pairs.slice(0, 6)
 
-// Legacy exports for backward compatibility
-export const CRYPTO_PAIRS = CRYPTO_CATEGORIES.all.pairs
-export const SIGNAL_PAIRS = CRYPTO_CATEGORIES.major.pairs.slice(0, 6)
+export function getCategoryPairs(category: AssetCategory): string[] {
+  return ASSET_CATEGORIES[category]?.pairs || ASSET_CATEGORIES.major.pairs
+}
 
-export function getCategoryPairs(category: CryptoCategory): string[] {
-  return CRYPTO_CATEGORIES[category]?.pairs || CRYPTO_CATEGORIES.all.pairs
+export function getCategorySource(category: AssetCategory): DataSource {
+  return ASSET_CATEGORIES[category]?.source || 'binance'
 }
 
 // Format symbol for display: BTCUSDT -> BTC/USDT

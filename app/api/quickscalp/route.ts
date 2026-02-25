@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { getKlines, CRYPTO_PAIRS, formatSymbol, getCategoryPairs, CryptoCategory } from '@/lib/binance'
+import { getKlines, formatSymbol, getCategoryPairs, getCategorySource, CryptoCategory } from '@/lib/binance'
+import { getTwelveDataKlines } from '@/lib/twelvedata'
 import {
   parseKlines,
   calcEMA,
@@ -41,13 +42,18 @@ function isRateLimited(ip: string): boolean {
   return false
 }
 
-async function getCachedKlines(symbol: string, interval: string, limit: number) {
-  const key = `${symbol}-${interval}-${limit}`
+const TD_CACHE_TTL = 60_000 // 60 seconds for Twelve Data (rate limit protection)
+
+async function getCachedKlines(symbol: string, interval: string, limit: number, source: 'binance' | 'twelvedata' = 'binance') {
+  const key = `${source}-${symbol}-${interval}-${limit}`
   const now = Date.now()
-  if (cache[key] && now - cache[key].timestamp < CACHE_TTL) {
+  const ttl = source === 'twelvedata' ? TD_CACHE_TTL : CACHE_TTL
+  if (cache[key] && now - cache[key].timestamp < ttl) {
     return cache[key].data
   }
-  const data = await getKlines(symbol, interval, limit)
+  const data = source === 'twelvedata'
+    ? await getTwelveDataKlines(symbol, interval, limit)
+    : await getKlines(symbol, interval, limit)
   cache[key] = { data, timestamp: now }
   return data
 }
@@ -598,6 +604,7 @@ export async function GET(request: Request) {
 
     // Use specific symbol, category pairs, or default major pairs
     const symbols = symbolParam ? [symbolParam] : getCategoryPairs(category)
+    const source = getCategorySource(category)
 
     const signals: QuickScalpSignal[] = []
 
@@ -605,14 +612,14 @@ export async function GET(request: Request) {
     const promises = symbols.map(async (symbol) => {
       try {
         // Get main timeframe candles
-        const rawKlines = await getCachedKlines(symbol, interval, 200)
+        const rawKlines = await getCachedKlines(symbol, interval, 200, source)
         if (rawKlines.length < 50) return null
         const candles = parseKlines(rawKlines)
 
         // Get mid timeframe (15m) for fast trend detection
         let mtfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL'
         try {
-          const mtfKlines = await getCachedKlines(symbol, '15m', 50)
+          const mtfKlines = await getCachedKlines(symbol, '15m', 50, source)
           if (mtfKlines.length >= 30) {
             const mtfCandles = parseKlines(mtfKlines)
             const mtfCloses = mtfCandles.map((c: OHLCV) => c.close)
@@ -631,7 +638,7 @@ export async function GET(request: Request) {
         // Get higher timeframe (1h) for trend filter
         let htfTrend: 'UP' | 'DOWN' | 'NEUTRAL' = 'NEUTRAL'
         try {
-          const htfKlines = await getCachedKlines(symbol, '1h', 50)
+          const htfKlines = await getCachedKlines(symbol, '1h', 50, source)
           if (htfKlines.length >= 30) {
             const htfCandles = parseKlines(htfKlines)
             const htfCloses = htfCandles.map((c: OHLCV) => c.close)
