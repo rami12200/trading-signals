@@ -162,7 +162,7 @@ export default function ICTPage() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-bold">
-              👑 مؤشر أبو خالد
+              🎯 القناص
               <span className="text-sm font-normal text-neutral-400 mr-2">ICT Smart Money</span>
             </h1>
             <p className="text-xs text-neutral-500 mt-1">
@@ -273,7 +273,7 @@ export default function ICTPage() {
           <div className="flex items-start gap-3 text-xs">
             <span className="text-amber-400 text-lg leading-none">👑</span>
             <div className="text-neutral-400">
-              <strong className="text-amber-400">مؤشر أبو خالد</strong> — مبني على أسلوب ICT (Smart Money).
+              <strong className="text-amber-400">القناص</strong> — مبني على أسلوب ICT (Smart Money).
               يعتمد على Order Blocks والسيولة وهيكل السوق بدل المؤشرات التقليدية.
               <strong className="text-white"> الإشارات أقل بس أدق.</strong>
             </div>
@@ -393,7 +393,7 @@ export default function ICTPage() {
 
         {/* Footer */}
         <div className="text-center text-xs text-neutral-600 mt-8 mb-4">
-          مؤشر أبو خالد 👑 — ICT Smart Money Concepts
+          القناص 🎯 — ICT Smart Money Concepts
           <br />
           <span className="text-neutral-700">Order Blocks • FVG • Liquidity • BOS/CHoCH</span>
         </div>

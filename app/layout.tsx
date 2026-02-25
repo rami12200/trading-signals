@@ -37,6 +37,7 @@ export default function RootLayout({
                 <NavLink href="/qabas">مؤشر القبس</NavLink>
                 <NavLink href="/signals">الإشارات</NavLink>
                 <NavLink href="/quickscalp">سكالبينج سريع</NavLink>
+                <NavLink href="/ict">🎯 القناص</NavLink>
                 <NavLink href="/smc">🏦 SMC</NavLink>
                 <NavLink href="/scalping">المضاربة</NavLink>
                 <NavLink href="/daily">يومي</NavLink>
@@ -70,6 +71,7 @@ export default function RootLayout({
                   <h4 className="font-semibold mb-3 text-sm">التوصيات</h4>
                   <div className="flex flex-col gap-2 text-sm text-neutral-400">
                     <Link href="/quickscalp" className="hover:text-white transition-colors">السكالبينج السريع</Link>
+                    <Link href="/ict" className="hover:text-white transition-colors">🎯 القناص ICT</Link>
                     <Link href="/smc" className="hover:text-white transition-colors">🏦 Smart Money</Link>
                     <Link href="/scalping" className="hover:text-white transition-colors">المضاربة اللحظية</Link>
                     <Link href="/daily" className="hover:text-white transition-colors">التوصيات اليومية</Link>
@@ -131,6 +133,7 @@ function MobileMenu() {
           <MobileNavLink href="/qabas">مؤشر القبس</MobileNavLink>
           <MobileNavLink href="/signals">الإشارات</MobileNavLink>
           <MobileNavLink href="/quickscalp">سكالبينج سريع</MobileNavLink>
+          <MobileNavLink href="/ict">🎯 القناص</MobileNavLink>
           <MobileNavLink href="/smc">🏦 SMC</MobileNavLink>
           <MobileNavLink href="/scalping">المضاربة</MobileNavLink>
           <MobileNavLink href="/daily">يومي</MobileNavLink>
