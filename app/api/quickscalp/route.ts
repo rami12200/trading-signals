@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getKlines, formatSymbol, getCategoryPairs, getCategorySource, CryptoCategory } from '@/lib/binance'
-import { getTwelveDataKlines } from '@/lib/twelvedata'
+import { getFinnhubKlines } from '@/lib/finnhub'
 import {
   parseKlines,
   calcEMA,
@@ -42,17 +42,17 @@ function isRateLimited(ip: string): boolean {
   return false
 }
 
-const TD_CACHE_TTL = 60_000 // 60 seconds for Twelve Data (rate limit protection)
+const FINNHUB_CACHE_TTL = 30_000 // 30 seconds for Finnhub (60 req/min is generous)
 
-async function getCachedKlines(symbol: string, interval: string, limit: number, source: 'binance' | 'twelvedata' = 'binance') {
+async function getCachedKlines(symbol: string, interval: string, limit: number, source: 'binance' | 'finnhub' = 'binance') {
   const key = `${source}-${symbol}-${interval}-${limit}`
   const now = Date.now()
-  const ttl = source === 'twelvedata' ? TD_CACHE_TTL : CACHE_TTL
+  const ttl = source === 'finnhub' ? FINNHUB_CACHE_TTL : CACHE_TTL
   if (cache[key] && now - cache[key].timestamp < ttl) {
     return cache[key].data
   }
-  const data = source === 'twelvedata'
-    ? await getTwelveDataKlines(symbol, interval, limit)
+  const data = source === 'finnhub'
+    ? await getFinnhubKlines(symbol, interval, limit)
     : await getKlines(symbol, interval, limit)
   cache[key] = { data, timestamp: now }
   return data

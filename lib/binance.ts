@@ -94,7 +94,7 @@ export async function getKlines(
 }
 
 // === Asset categories — Binance (crypto) + Twelve Data (stocks, forex, metals) ===
-export type DataSource = 'binance' | 'twelvedata'
+export type DataSource = 'binance' | 'finnhub'
 export type AssetCategory = 'major' | 'defi' | 'layer1' | 'layer2' | 'meme' | 'gaming' | 'stocks' | 'forex' | 'metals'
 
 export interface CategoryConfig {
@@ -150,28 +150,28 @@ export const ASSET_CATEGORIES: Record<AssetCategory, CategoryConfig> = {
       'AXSUSDT', 'SANDUSDT', 'MANAUSDT', 'GALAUSDT', 'ENJUSDT',
     ],
   },
-  // ---- Stocks (Twelve Data) ----
+  // ---- Stocks (Finnhub) ----
   stocks: {
     label: 'أسهم أمريكية',
-    source: 'twelvedata',
+    source: 'finnhub',
     pairs: [
       'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA',
       'JPM', 'V', 'JNJ', 'WMT', 'HD', 'INTC', 'IBM', 'COST',
     ],
   },
-  // ---- Forex (Twelve Data) ----
+  // ---- Forex (Finnhub) ----
   forex: {
     label: 'فوركس',
-    source: 'twelvedata',
+    source: 'finnhub',
     pairs: [
       'EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF',
       'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP',
     ],
   },
-  // ---- Metals (Twelve Data) ----
+  // ---- Metals (Finnhub) ----
   metals: {
     label: 'معادن',
-    source: 'twelvedata',
+    source: 'finnhub',
     pairs: [
       'XAU/USD', 'XAG/USD',
     ],
