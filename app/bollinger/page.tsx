@@ -49,6 +49,8 @@ export default function BollingerPage() {
   const [favorites, setFavorites] = useState<string[]>([])
   const [showFavOnly, setShowFavOnly] = useState(false)
   const [soundEnabled, setSoundEnabled] = useState(false)
+  const [allFavSignals, setAllFavSignals] = useState<BollingerSignal[]>([])
+  const [loadingFavs, setLoadingFavs] = useState(false)
   const [executingTrade, setExecutingTrade] = useState<string | null>(null)
   const [executedTrades, setExecutedTrades] = useState<Record<string, boolean>>({})
   const prevSignalsRef = useRef<Record<string, string>>({})
@@ -101,17 +103,53 @@ export default function BollingerPage() {
     }
   }, [category, timeframe, soundEnabled])
 
-  useEffect(() => {
-    setLoading(true)
-    setShowFavOnly(false)
-    fetchSignals()
-    const interval = setInterval(fetchSignals, 30000)
-    return () => clearInterval(interval)
-  }, [fetchSignals])
+  // جلب المفضلات من كل الفئات
+  const fetchAllFavorites = useCallback(async () => {
+    if (favorites.length === 0) { setAllFavSignals([]); return }
+    setLoadingFavs(true)
+    try {
+      const cats = Object.keys(CRYPTO_CATEGORIES) as CryptoCategory[]
+      const results = await Promise.all(
+        cats.map(async (cat) => {
+          try {
+            const res = await fetch(`/api/bollinger?category=${cat}&interval=${timeframe}`)
+            const data = await res.json()
+            return (data.signals || []) as BollingerSignal[]
+          } catch { return [] as BollingerSignal[] }
+        })
+      )
+      const all = results.flat().filter(s => favorites.includes(s.symbol))
+      // إزالة التكرارات
+      const unique = Array.from(new Map(all.map(s => [s.symbol, s])).values())
+      setAllFavSignals(unique)
+    } catch (e) {
+      console.error('خطأ في جلب المفضلات:', e)
+    } finally {
+      setLoadingFavs(false)
+    }
+  }, [favorites, timeframe])
 
-  const displayedSignals = (showFavOnly ? signals.filter(s => favorites.includes(s.symbol)) : signals)
+  useEffect(() => {
+    if (!showFavOnly) {
+      setLoading(true)
+      fetchSignals()
+      const interval = setInterval(fetchSignals, 30000)
+      return () => clearInterval(interval)
+    }
+  }, [fetchSignals, showFavOnly])
+
+  // لما يفعّل المفضلة، نجلب من كل الفئات
+  useEffect(() => {
+    if (showFavOnly) {
+      fetchAllFavorites()
+      const interval = setInterval(fetchAllFavorites, 30000)
+      return () => clearInterval(interval)
+    }
+  }, [showFavOnly, fetchAllFavorites])
+
+  const displayedSignals = (showFavOnly ? allFavSignals : signals)
     .map(sig => {
-      if (isCrypto && ws.prices[sig.symbol.toLowerCase()]) {
+      if (ws.prices[sig.symbol.toLowerCase()]) {
         return { ...sig, price: ws.prices[sig.symbol.toLowerCase()].price }
       }
       return sig
@@ -270,7 +308,7 @@ export default function BollingerPage() {
         </div>
 
         {/* الإشارات */}
-        {loading ? (
+        {(loading || loadingFavs) ? (
           <div className="space-y-4">
             {[1, 2, 3, 4].map(i => (
               <div key={i} className="card animate-pulse h-48" />

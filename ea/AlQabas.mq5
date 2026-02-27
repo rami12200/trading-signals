@@ -442,8 +442,11 @@ void CheckOrderQueue()
       
       Print("Found pending order: ", orderId, " Action: ", action, " Symbol: ", symbol);
       
-      // تحويل الرمز من Binance (BTCUSDT) إلى MT5 (BTCUSD)
+      // تحويل الرمز لصيغة MT5
+      // Binance: BTCUSDT → BTCUSD
+      // Twelve Data: XAU/USD → XAUUSD, EUR/USD → EURUSD
       string baseSymbol = symbol;
+      StringReplace(baseSymbol, "/", "");  // شيل / من XAU/USD → XAUUSD
       if(StringFind(baseSymbol, "USDT") > 0) StringReplace(baseSymbol, "USDT", "USD");
       
       // البحث التلقائي عن الرمز الصحيح عند البروكر
