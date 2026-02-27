@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getKlines, getCategoryPairs, getCategorySource, CryptoCategory } from '@/lib/binance'
 import { getDatabentoKlines } from '@/lib/databento'
+import { getTwelveDataKlines } from '@/lib/twelvedata'
 import { parseKlines } from '@/lib/indicators'
 import { analyzeBollinger } from '@/lib/bollinger-strategy'
 
@@ -25,16 +26,21 @@ function isRateLimited(ip: string): boolean {
   return false
 }
 
-async function getCachedKlines(symbol: string, interval: string, limit: number, source: 'binance' | 'databento' = 'binance') {
+async function getCachedKlines(symbol: string, interval: string, limit: number, source: 'binance' | 'databento' | 'twelvedata' = 'binance') {
   const key = `bb-${source}-${symbol}-${interval}-${limit}`
   const now = Date.now()
-  const ttl = source === 'databento' ? DATABENTO_CACHE_TTL : CACHE_TTL
+  const ttl = source === 'databento' || source === 'twelvedata' ? DATABENTO_CACHE_TTL : CACHE_TTL
   if (cache[key] && now - cache[key].timestamp < ttl) {
     return cache[key].data
   }
-  const data = source === 'databento'
-    ? await getDatabentoKlines(symbol, interval, limit)
-    : await getKlines(symbol, interval, limit)
+  let data: any[]
+  if (source === 'twelvedata') {
+    data = await getTwelveDataKlines(symbol, interval, limit)
+  } else if (source === 'databento') {
+    data = await getDatabentoKlines(symbol, interval, limit)
+  } else {
+    data = await getKlines(symbol, interval, limit)
+  }
   cache[key] = { data, timestamp: now }
   return data
 }

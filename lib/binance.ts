@@ -94,8 +94,8 @@ export async function getKlines(
 }
 
 // === Asset categories — Binance (crypto) + Twelve Data (stocks, forex, metals) ===
-export type DataSource = 'binance' | 'databento'
-export type AssetCategory = 'major' | 'defi' | 'layer1' | 'layer2' | 'meme' | 'gaming' | 'stocks' | 'metals'
+export type DataSource = 'binance' | 'databento' | 'twelvedata'
+export type AssetCategory = 'major' | 'defi' | 'layer1' | 'layer2' | 'meme' | 'gaming' | 'stocks' | 'metals' | 'forex'
 
 export interface CategoryConfig {
   label: string
@@ -159,12 +159,21 @@ export const ASSET_CATEGORIES: Record<AssetCategory, CategoryConfig> = {
       'JPM', 'V', 'JNJ', 'WMT', 'HD', 'INTC', 'IBM', 'COST',
     ],
   },
-  // ---- Metals (Binance - tokenized) ----
+  // ---- Metals (Twelve Data — أسعار فورية مثل MT5) ----
   metals: {
     label: 'معادن',
-    source: 'binance',
+    source: 'twelvedata',
     pairs: [
-      'PAXGUSDT',
+      'XAU/USD', 'XAG/USD',
+    ],
+  },
+  // ---- Forex (Twelve Data — فوري) ----
+  forex: {
+    label: 'فوركس',
+    source: 'twelvedata',
+    pairs: [
+      'EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF',
+      'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP',
     ],
   },
 }
@@ -174,7 +183,7 @@ export type CryptoCategory = AssetCategory
 export const CRYPTO_CATEGORIES = ASSET_CATEGORIES
 
 // All crypto pairs (Binance only) — deduplicated
-const cryptoCats: AssetCategory[] = ['major', 'defi', 'layer1', 'layer2', 'meme', 'gaming', 'metals']
+const cryptoCats: AssetCategory[] = ['major', 'defi', 'layer1', 'layer2', 'meme', 'gaming']
 export const CRYPTO_PAIRS = Array.from(
   new Set(cryptoCats.flatMap(k => ASSET_CATEGORIES[k].pairs))
 )
