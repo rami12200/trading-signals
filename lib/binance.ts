@@ -95,7 +95,7 @@ export async function getKlines(
 
 // === Asset categories — Binance (crypto) + Twelve Data (stocks, forex, metals) ===
 export type DataSource = 'binance' | 'databento'
-export type AssetCategory = 'major' | 'defi' | 'layer1' | 'layer2' | 'meme' | 'gaming' | 'stocks'
+export type AssetCategory = 'major' | 'defi' | 'layer1' | 'layer2' | 'meme' | 'gaming' | 'stocks' | 'metals'
 
 export interface CategoryConfig {
   label: string
@@ -159,7 +159,14 @@ export const ASSET_CATEGORIES: Record<AssetCategory, CategoryConfig> = {
       'JPM', 'V', 'JNJ', 'WMT', 'HD', 'INTC', 'IBM', 'COST',
     ],
   },
-  // فوركس ومعادن: Databento GLBX.MDP3 يحتاج اشتراك مدفوع — معطلة مؤقتاً
+  // ---- Metals (Binance - tokenized) ----
+  metals: {
+    label: 'معادن',
+    source: 'binance',
+    pairs: [
+      'PAXGUSDT',
+    ],
+  },
 }
 
 // Legacy type alias for backward compatibility
@@ -167,7 +174,7 @@ export type CryptoCategory = AssetCategory
 export const CRYPTO_CATEGORIES = ASSET_CATEGORIES
 
 // All crypto pairs (Binance only) — deduplicated
-const cryptoCats: AssetCategory[] = ['major', 'defi', 'layer1', 'layer2', 'meme', 'gaming']
+const cryptoCats: AssetCategory[] = ['major', 'defi', 'layer1', 'layer2', 'meme', 'gaming', 'metals']
 export const CRYPTO_PAIRS = Array.from(
   new Set(cryptoCats.flatMap(k => ASSET_CATEGORIES[k].pairs))
 )
