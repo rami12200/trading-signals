@@ -22,9 +22,9 @@ input int      MaxTrades    = 5;                       // أقصى عدد صفق
 input int      Slippage     = 30;                      // الانزلاق السعري (نقاط)
 input int      MagicNumber  = 202601;                  // الرقم السحري للصفقات
 input bool     UseTrailing  = true;                    // تفعيل الوقف المتحرك
-input double   BreakevenATR = 1.0;                     // أمّن الدخول بعد (x ATR) ربح
-input double   TrailingStartATR = 1.5;                 // ابدأ الوقف المتحرك بعد (x ATR) ربح
-input double   TrailingDistATR = 0.5;                  // مسافة الوقف المتحرك (x ATR)
+input double   BreakevenATR = 1.5;                     // أمّن الدخول بعد (x ATR) ربح
+input double   TrailingStartATR = 2.5;                 // ابدأ الوقف المتحرك بعد (x ATR) ربح
+input double   TrailingDistATR = 1.0;                  // مسافة الوقف المتحرك (x ATR)
 input int      ATR_Period = 14;                        // فترة ATR
 input ENUM_TIMEFRAMES ATR_Timeframe = PERIOD_H1;      // الإطار الزمني لـ ATR
 
@@ -166,11 +166,16 @@ void CheckTrailingStop()
          priceDist = openPrice - price;
       else continue;
       
-      // الحدود
-      double breakevenDist  = atr * BreakevenATR;    // مثلاً 1.0 × ATR
-      double trailStartDist = atr * TrailingStartATR; // مثلاً 1.5 × ATR
-      double trailDist      = atr * TrailingDistATR;  // مثلاً 0.5 × ATR
-      trailDist = MathMax(trailDist, point * 10);     // حد أدنى 10 نقاط
+      // === المراحل الثلاث ===
+      // المرحلة 1: Breakeven — أمّن الدخول (1.5x ATR)
+      // المرحلة 2: Lock Profit — أقفل 50% من الربح (2.0x ATR)
+      // المرحلة 3: Trailing — تابع السعر بمسافة 1.0x ATR (2.5x ATR+)
+      
+      double breakevenDist   = atr * BreakevenATR;       // 1.5 × ATR
+      double lockProfitDist  = atr * 2.0;                // 2.0 × ATR — مرحلة جديدة
+      double trailStartDist  = atr * TrailingStartATR;   // 2.5 × ATR
+      double trailDist       = atr * TrailingDistATR;    // 1.0 × ATR
+      trailDist = MathMax(trailDist, spread * 3);        // حد أدنى = 3x السبريد (أفضل من 10 نقاط ثابتة)
       
       double newSL = 0;
       string phase = "";
@@ -179,38 +184,51 @@ void CheckTrailingStop()
       {
          if(priceDist >= trailStartDist)
          {
-            // المرحلة 2: Trailing — الوقف يتحرك مع السعر
+            // المرحلة 3: Trailing — الوقف يتحرك مع السعر
             newSL = NormalizeDouble(price - trailDist, digits);
             phase = "TRAIL";
-            // لازم يكون أعلى من الوقف الحالي
             if(newSL <= sl && sl != 0) continue;
-            // ولازم يكون فوق سعر الدخول
+            if(newSL <= openPrice) continue;
+         }
+         else if(priceDist >= lockProfitDist)
+         {
+            // المرحلة 2: Lock Profit — أقفل 50% من الربح المحقق
+            newSL = NormalizeDouble(openPrice + priceDist * 0.5, digits);
+            phase = "LOCK50";
+            if(newSL <= sl && sl != 0) continue;
             if(newSL <= openPrice) continue;
          }
          else if(priceDist >= breakevenDist)
          {
-            // المرحلة 1: Breakeven — أمّن سعر الدخول
-            newSL = NormalizeDouble(openPrice + spread + point, digits);
+            // المرحلة 1: Breakeven — أمّن سعر الدخول + هامش صغير
+            newSL = NormalizeDouble(openPrice + spread * 2 + point, digits);
             phase = "BE";
-            // لا نعدل لو الوقف أصلاً عند الدخول أو أعلى
             if(sl >= openPrice && sl != 0) continue;
          }
-         else continue; // ما وصلنا لأي مرحلة بعد
+         else continue;
       }
       else if(posType == POSITION_TYPE_SELL)
       {
          if(priceDist >= trailStartDist)
          {
-            // المرحلة 2: Trailing
+            // المرحلة 3: Trailing
             newSL = NormalizeDouble(price + trailDist, digits);
             phase = "TRAIL";
             if(newSL >= sl && sl != 0) continue;
             if(newSL >= openPrice) continue;
          }
+         else if(priceDist >= lockProfitDist)
+         {
+            // المرحلة 2: Lock Profit — أقفل 50% من الربح المحقق
+            newSL = NormalizeDouble(openPrice - priceDist * 0.5, digits);
+            phase = "LOCK50";
+            if(newSL >= sl && sl != 0 && sl > 0) continue;
+            if(newSL >= openPrice) continue;
+         }
          else if(priceDist >= breakevenDist)
          {
             // المرحلة 1: Breakeven
-            newSL = NormalizeDouble(openPrice - spread - point, digits);
+            newSL = NormalizeDouble(openPrice - spread * 2 - point, digits);
             phase = "BE";
             if(sl <= openPrice && sl != 0 && sl > 0) continue;
          }
@@ -237,7 +255,7 @@ void CheckTrailingStop()
                " price=", DoubleToString(price, digits),
                " newSL=", DoubleToString(newSL, digits),
                " ATR=", DoubleToString(atr, digits),
-               " dist=", DoubleToString(priceDist, digits));
+               " profit=", DoubleToString(priceDist, digits));
       }
       else
       {
