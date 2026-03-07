@@ -119,6 +119,7 @@ export interface QuantAnalysis {
     longLiquidations: number
     netDirection: 'BULLISH_SQUEEZE' | 'BEARISH_CASCADE' | 'NEUTRAL'
   }
+  htfContext?: HTFContext
 }
 
 export interface RealOrderFlow {
@@ -131,6 +132,14 @@ export interface CandleDelta {
   buyVolume: number
   sellVolume: number
   delta: number
+}
+
+export interface HTFContext {
+  trend: 'UP' | 'DOWN' | 'RANGE'
+  ema50: number
+  priceVsEma: 'ABOVE' | 'BELOW'
+  structure: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
+  interval: string
 }
 
 export interface BacktestResult {
@@ -372,29 +381,119 @@ function detectLiquidityClusters(candles: Candle[]): LiquidityCluster[] {
   return clusters
 }
 
-function analyzeLiquidity(clusters: LiquidityCluster[], candles: Candle[]): LayerResult {
+function analyzeLiquidityAndStopHunt(clusters: LiquidityCluster[], candles: Candle[]): LayerResult {
   const currentPrice = last(candles).close
+  const prevCandle = prev(candles, 1)    // 1 bar ago
   const prevPrice = prev(candles, 2).close
-  const sweptClusters = clusters.filter(c => c.swept)
 
-  // Check for recent sweep + reversal
+  // Volume confirmation: is recent volume above average?
+  const avgVol = candles.slice(-30, -3).reduce((s, c) => s + c.volume, 0) / Math.max(1, candles.slice(-30, -3).length)
+  const recentVol = candles.slice(-3).reduce((s, c) => s + c.volume, 0) / 3
+  const volumeConfirmed = recentVol > avgVol * 1.2
+
+  // ─── Stop Hunt Pattern 1: Wick Hunt ─────────────────────────────────────
+  // A candle wicks through a key level but CLOSES back inside (stop hunt candle)
+  const lastCandle = last(candles)
+  const wickHuntDown = clusters.some(cluster => {
+    const swept = lastCandle.low < cluster.price && lastCandle.close > cluster.price
+    return swept && (cluster.type === 'EQUAL_LOWS' || cluster.type === 'PREV_DAILY_LOW' || cluster.type === 'RANGE_LOW')
+  })
+  const wickHuntUp = clusters.some(cluster => {
+    const swept = lastCandle.high > cluster.price && lastCandle.close < cluster.price
+    return swept && (cluster.type === 'EQUAL_HIGHS' || cluster.type === 'PREV_DAILY_HIGH' || cluster.type === 'RANGE_HIGH')
+  })
+
+  // ─── Stop Hunt Pattern 2: False Breakout with Reversal ──────────────────
+  // Price breaks a level 1-3 bars ago, returns back, and now confirms reversal
+  const recentBars = candles.slice(-4)
+  let falseBreakBullish = false
+  let falseBreakBearish = false
+
+  for (const cluster of clusters) {
+    for (let i = 0; i < recentBars.length - 1; i++) {
+      const bar = recentBars[i]
+      // Bearish false break: bar closed below support but price is now back above
+      if (bar.close < cluster.price && currentPrice > cluster.price &&
+        (cluster.type === 'EQUAL_LOWS' || cluster.type === 'PREV_DAILY_LOW' || cluster.type === 'RANGE_LOW')) {
+        falseBreakBullish = true
+      }
+      // Bullish false break: bar closed above resistance but price now back below
+      if (bar.close > cluster.price && currentPrice < cluster.price &&
+        (cluster.type === 'EQUAL_HIGHS' || cluster.type === 'PREV_DAILY_HIGH' || cluster.type === 'RANGE_HIGH')) {
+        falseBreakBearish = true
+      }
+    }
+  }
+
+  // ─── Classic Liquidity Sweep (original logic) ────────────────────────────
+  const sweptClusters = clusters.filter(c => c.swept)
   const recentSweepUp = sweptClusters.some(c => c.sweepDirection === 'UP') && currentPrice < prevPrice
   const recentSweepDown = sweptClusters.some(c => c.sweepDirection === 'DOWN') && currentPrice > prevPrice
 
+  // ─── Score + direction ───────────────────────────────────────────────────
+
+  // Wick hunt — strongest signal (confirms stop hunt in this exact candle)
+  if (wickHuntDown) {
+    const score = volumeConfirmed ? 90 : 72
+    return {
+      name: 'Liquidity Sweep',
+      score,
+      weight: volumeConfirmed ? 0.16 : 0.12,
+      direction: 'BULLISH',
+      detail: `Wick Hunt ↓ @ ${lastCandle.low.toFixed(2)} — stops swept + close above${volumeConfirmed ? ' [VOL✓]' : ' [low vol]'}`,
+    }
+  }
+  if (wickHuntUp) {
+    const score = volumeConfirmed ? 90 : 72
+    return {
+      name: 'Liquidity Sweep',
+      score,
+      weight: volumeConfirmed ? 0.16 : 0.12,
+      direction: 'BEARISH',
+      detail: `Wick Hunt ↑ @ ${lastCandle.high.toFixed(2)} — stops swept + close below${volumeConfirmed ? ' [VOL✓]' : ' [low vol]'}`,
+    }
+  }
+
+  // False breakout reversal
+  if (falseBreakBullish) {
+    const score = volumeConfirmed ? 84 : 66
+    return {
+      name: 'Liquidity Sweep',
+      score,
+      weight: volumeConfirmed ? 0.15 : 0.12,
+      direction: 'BULLISH',
+      detail: `False Break Reversal ↑ — price reclaimed support${volumeConfirmed ? ' [VOL✓]' : ''}`,
+    }
+  }
+  if (falseBreakBearish) {
+    const score = volumeConfirmed ? 84 : 66
+    return {
+      name: 'Liquidity Sweep',
+      score,
+      weight: volumeConfirmed ? 0.15 : 0.12,
+      direction: 'BEARISH',
+      detail: `False Break Reversal ↓ — price rejected resistance${volumeConfirmed ? ' [VOL✓]' : ''}`,
+    }
+  }
+
+  // Classic sweep
   if (recentSweepUp) {
-    return { name: 'Liquidity Sweep', score: 80, weight: 0.14, direction: 'BEARISH', detail: `Upside liquidity swept — reversal potential` }
+    return { name: 'Liquidity Sweep', score: volumeConfirmed ? 82 : 70, weight: 0.14, direction: 'BEARISH', detail: `Upside liquidity swept — reversal potential${volumeConfirmed ? ' [VOL✓]' : ''}` }
   }
   if (recentSweepDown) {
-    return { name: 'Liquidity Sweep', score: 80, weight: 0.14, direction: 'BULLISH', detail: `Downside liquidity swept — reversal potential` }
+    return { name: 'Liquidity Sweep', score: volumeConfirmed ? 82 : 70, weight: 0.14, direction: 'BULLISH', detail: `Downside liquidity swept — reversal potential${volumeConfirmed ? ' [VOL✓]' : ''}` }
   }
 
   // Near liquidity zone
   const nearCluster = clusters.find(c => Math.abs(c.price - currentPrice) / currentPrice < 0.002)
   if (nearCluster) {
-    return { name: 'Liquidity Sweep', score: 60, weight: 0.14, direction: 'NEUTRAL', detail: `Price near ${nearCluster.type} @ ${nearCluster.price.toFixed(2)}` }
+    return { name: 'Liquidity Sweep', score: 60, weight: 0.14, direction: 'NEUTRAL', detail: `Price approaching ${nearCluster.type} @ ${nearCluster.price.toFixed(2)}` }
   }
 
-  return { name: 'Liquidity Sweep', score: 40, weight: 0.14, direction: 'NEUTRAL', detail: 'No active liquidity sweep' }
+  // Suppress the unused variable warning
+  void prevCandle
+
+  return { name: 'Liquidity Sweep', score: 40, weight: 0.14, direction: 'NEUTRAL', detail: 'No active stop hunt or sweep' }
 }
 
 // ─── Layer 4: Order Flow Analysis (Delta Model) ─────────────────────────────
@@ -754,7 +853,7 @@ function analyzeVolatility(candles: Candle[]): LayerResult & { atrVal: number; b
 
 // ─── AI Probability Engine ───────────────────────────────────────────────────
 
-function computeProbability(layers: LayerResult[], regime: MarketRegime): { probability: number; direction: SignalDirection | null; label: string } {
+function computeProbability(layers: LayerResult[], regime: MarketRegime, htf?: HTFContext): { probability: number; direction: SignalDirection | null; label: string } {
   let bullishWeighted = 0, bearishWeighted = 0
   let activeWeight = 0
 
@@ -819,12 +918,73 @@ function computeProbability(layers: LayerResult[], regime: MarketRegime): { prob
   if (regime === 'TRENDING_DOWN' && direction === 'BUY') probability = Math.max(0, probability - 10)
   if (regime === 'HIGH_VOLATILITY') probability = Math.max(0, probability - 5)
 
+  // ─── Multi-Timeframe Alignment ───────────────────────────────────────────
+  if (htf && direction) {
+    const htfBullish = htf.trend === 'UP' || htf.structure === 'BULLISH'
+    const htfBearish = htf.trend === 'DOWN' || htf.structure === 'BEARISH'
+
+    if (direction === 'BUY' && htfBullish && htf.priceVsEma === 'ABOVE') {
+      // HTF confirms LTF BUY — strong alignment
+      probability = Math.min(100, probability + 10)
+    } else if (direction === 'SELL' && htfBearish && htf.priceVsEma === 'BELOW') {
+      // HTF confirms LTF SELL — strong alignment
+      probability = Math.min(100, probability + 10)
+    } else if (direction === 'BUY' && htf.trend === 'DOWN') {
+      // Trading against HTF trend — high-risk counter-trend
+      probability = Math.max(0, probability - 18)
+    } else if (direction === 'SELL' && htf.trend === 'UP') {
+      // Trading against HTF trend — high-risk counter-trend
+      probability = Math.max(0, probability - 18)
+    } else if (htf.trend === 'RANGE') {
+      // HTF ranging: slight penalty for trending entries, neutral otherwise
+      if (regime === 'TRENDING_UP' || regime === 'TRENDING_DOWN') {
+        probability = Math.max(0, probability - 5)
+      }
+    }
+  }
+
   const label = probability >= 90 ? 'EXTREME OPPORTUNITY' :
     probability >= 85 ? 'INSTITUTIONAL SETUP' :
     probability >= 75 ? 'HIGH PROBABILITY' :
     probability >= 60 ? 'MODERATE' : 'LOW'
 
   return { probability, direction, label }
+}
+
+// ─── Higher Timeframe Context Builder ───────────────────────────────────────
+
+export function buildHTFContext(htfCandles: Candle[], interval: string): HTFContext {
+  if (htfCandles.length < 55) {
+    return { trend: 'RANGE', ema50: 0, priceVsEma: 'ABOVE', structure: 'NEUTRAL', interval }
+  }
+
+  const closes = htfCandles.map(c => c.close)
+  const ema50 = last(ema(closes, 50))
+  const currentPrice = last(htfCandles).close
+  const priceVsEma: 'ABOVE' | 'BELOW' = currentPrice >= ema50 ? 'ABOVE' : 'BELOW'
+
+  // Slope of EMA50 over last 10 bars
+  const ema50Values = ema(closes, 50)
+  const recentEma = ema50Values.slice(-10)
+  const slope = recentEma.length >= 10
+    ? (recentEma[9] - recentEma[0]) / recentEma[0] * 100
+    : 0
+
+  const trend: 'UP' | 'DOWN' | 'RANGE' =
+    slope > 0.08 && priceVsEma === 'ABOVE' ? 'UP' :
+    slope < -0.08 && priceVsEma === 'BELOW' ? 'DOWN' :
+    'RANGE'
+
+  // HTF market structure
+  const swings = detectSwingPoints(htfCandles.slice(-60))
+  const recent = swings.slice(-6)
+  const bullCount = recent.filter(s => s.type === 'HH' || s.type === 'HL').length
+  const bearCount = recent.filter(s => s.type === 'LH' || s.type === 'LL').length
+  const structure: 'BULLISH' | 'BEARISH' | 'NEUTRAL' =
+    bullCount > bearCount ? 'BULLISH' :
+    bearCount > bullCount ? 'BEARISH' : 'NEUTRAL'
+
+  return { trend, ema50, priceVsEma, structure, interval }
 }
 
 // ─── Signal Generation ───────────────────────────────────────────────────────
@@ -890,7 +1050,8 @@ export function runQuantAnalysis(
   fundingRate: number,
   oiCurrent: number,
   oiPrevious: number,
-  realOrderFlow?: RealOrderFlow
+  realOrderFlow?: RealOrderFlow,
+  htfContext?: HTFContext
 ): QuantAnalysis {
   if (candles.length < 50) {
     const emptyAnalysis: QuantAnalysis = {
@@ -928,7 +1089,7 @@ export function runQuantAnalysis(
   const liquidityClusters = detectLiquidityClusters(candles)
 
   const structureLayer = analyzeStructure(swingPoints)
-  const liquidityLayer = analyzeLiquidity(liquidityClusters, candles)
+  const liquidityLayer = analyzeLiquidityAndStopHunt(liquidityClusters, candles)
   const orderFlowLayer = analyzeOrderFlow(candles, realOrderFlow)
   const orderBookLayer = analyzeOrderBook(orderBook, price)
   const oiChangePct = oiPrevious > 0 ? ((oiCurrent - oiPrevious) / oiPrevious) * 100 : 0
@@ -950,8 +1111,8 @@ export function runQuantAnalysis(
     fundingLayer,
   ]
 
-  // Compute probability
-  const { probability, direction, label } = computeProbability(layers, regime)
+  // Compute probability (with optional HTF alignment)
+  const { probability, direction, label } = computeProbability(layers, regime, htfContext)
 
   // Generate signal with quality filter
   let signal: QuantSignal | null = null
@@ -1028,6 +1189,7 @@ export function runQuantAnalysis(
       longLiquidations: liquidationLayer.longLiq,
       netDirection: liquidationLayer.net,
     },
+    htfContext,
   }
 }
 

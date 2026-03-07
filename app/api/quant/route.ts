@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { runQuantAnalysis, backtestStrategy, Candle, OrderBook, RealOrderFlow } from '@/lib/quant-engine'
+import { runQuantAnalysis, backtestStrategy, buildHTFContext, Candle, OrderBook, RealOrderFlow } from '@/lib/quant-engine'
+import { logSignal, verifyPendingSignals } from '@/lib/signal-logger'
 
 // ============================================
 // Institutional Quant AI Engine API
@@ -144,9 +145,14 @@ export async function GET(req: Request) {
 
     const doBacktest = searchParams.get('backtest') === 'true'
 
-    // Fetch all data in parallel
-    const [candles, orderBook, fundingRate, oi, price, realFlow] = await Promise.all([
+    // Determine HTF interval
+    const htfMap: Record<string, string> = { '1m': '5m', '5m': '15m', '15m': '1h' }
+    const htfInterval = htfMap[interval] || '1h'
+
+    // Fetch all data in parallel (including HTF candles)
+    const [candles, htfCandles, orderBook, fundingRate, oi, price, realFlow] = await Promise.all([
       getKlines(pair, interval, doBacktest ? 1000 : 200),
+      getKlines(pair, htfInterval, 120),
       getOrderBook(pair, 100),
       getFundingRate(pair),
       getOpenInterest(pair),
@@ -154,8 +160,19 @@ export async function GET(req: Request) {
       getRealOrderFlow(pair),
     ])
 
-    // Run quant analysis with real order flow
-    const analysis = runQuantAnalysis(pair, candles.slice(-200), orderBook, fundingRate, oi.current, oi.previous, realFlow)
+    // Build higher timeframe context
+    const htfContext = buildHTFContext(htfCandles, htfInterval)
+
+    // Run quant analysis with real order flow + HTF context
+    const analysis = runQuantAnalysis(pair, candles.slice(-200), orderBook, fundingRate, oi.current, oi.previous, realFlow, htfContext)
+
+    // Log signal if generated (fire-and-forget)
+    if (analysis.signal) {
+      logSignal(analysis.signal, interval)
+    }
+
+    // Verify pending signals against latest prices (background, fire-and-forget)
+    verifyPendingSignals({ [pair]: price })
 
     const response: any = {
       success: true,
