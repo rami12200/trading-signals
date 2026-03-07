@@ -95,7 +95,7 @@ export async function getKlines(
 
 // === Asset categories — Binance (crypto) + Twelve Data (stocks, forex, metals) ===
 export type DataSource = 'binance' | 'databento' | 'twelvedata'
-export type AssetCategory = 'major' | 'defi' | 'layer1' | 'layer2' | 'meme' | 'gaming' | 'stocks' | 'metals' | 'forex'
+export type AssetCategory = 'major' | 'defi' | 'layer1' | 'layer2' | 'meme' | 'gaming' | 'stocks' | 'metals' | 'forex' | 'indices'
 
 export interface CategoryConfig {
   label: string
@@ -174,6 +174,15 @@ export const ASSET_CATEGORIES: Record<AssetCategory, CategoryConfig> = {
     pairs: [
       'EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF',
       'AUD/USD', 'USD/CAD', 'NZD/USD', 'EUR/GBP',
+    ],
+  },
+  // ---- Indices (Twelve Data — مؤشرات عالمية) ----
+  indices: {
+    label: 'مؤشرات',
+    source: 'twelvedata',
+    pairs: [
+      'SPX', 'IXIC', 'DJI', 'NDX',
+      'FTSE', 'GDAXI', 'N225',
     ],
   },
 }

@@ -31,7 +31,7 @@ export default function RegisterPage() {
     try {
       await signUp(email.toLowerCase().trim(), password, name.trim())
       setSuccess('تم إنشاء الحساب بنجاح! جاري التحويل...')
-      setTimeout(() => router.push('/profile'), 1000)
+      setTimeout(() => { window.location.href = '/profile' }, 1000)
     } catch (err: any) {
       const msg = err.message || 'حدث خطأ'
       if (msg.includes('already registered')) {

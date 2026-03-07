@@ -43,7 +43,7 @@ function isRateLimited(ip: string): boolean {
   return false
 }
 
-const DATABENTO_CACHE_TTL = 120_000 // دقيقتين كاش لـ Databento (حفاظاً على الرصيد)
+const DATABENTO_CACHE_TTL = 300_000 // 5 دقائق — Twelve Data حد 800 طلب/يوم
 
 async function getCachedKlines(symbol: string, interval: string, limit: number, source: 'binance' | 'databento' | 'twelvedata' = 'binance') {
   const key = `${source}-${symbol}-${interval}-${limit}`

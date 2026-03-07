@@ -11,7 +11,7 @@ import { analyzeBollinger } from '@/lib/bollinger-strategy'
 
 const cache: Record<string, { data: any; timestamp: number }> = {}
 const CACHE_TTL = 15_000
-const DATABENTO_CACHE_TTL = 120_000
+const DATABENTO_CACHE_TTL = 300_000 // 5 دقائق — Twelve Data حد 800 طلب/يوم
 
 const rateLimiter: Record<string, number[]> = {}
 const RATE_LIMIT_WINDOW = 10_000

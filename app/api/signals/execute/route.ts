@@ -98,7 +98,18 @@ export async function POST(request: Request) {
       )
     }
 
-    const mt5Symbol = symbol.replace('USDT', 'USD')
+    // تحويل الرمز لصيغة MT5
+    let mt5Symbol = symbol.replace('USDT', 'USD')
+    // خريطة ETF → CFD (نفس الـ EA)
+    const symbolMap: Record<string, string> = {
+      'SPY': 'US500',
+      'QQQ': 'USTEC',
+      'DIA': 'US30',
+      'IWM': 'US2000',
+      'EWG': 'DE40',
+      'EWJ': 'JP225',
+    }
+    if (symbolMap[mt5Symbol]) mt5Symbol = symbolMap[mt5Symbol]
 
     const order: TradeOrder = {
       id: `order_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,

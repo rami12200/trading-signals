@@ -289,7 +289,8 @@ void DetectBrokerFormat()
    string baseSymbols[] = {
       "BTCUSD", "ETHUSD", "XRPUSD", "SOLUSD", "BNBUSD", "DOGEUSD", "ADAUSD",
       "XAUUSD", "XAGUSD", "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD",
-      "USDCHF", "NZDUSD", "GBPJPY", "EURJPY", "EURGBP"
+      "USDCHF", "NZDUSD", "GBPJPY", "EURJPY", "EURGBP",
+      "US500", "USTEC", "US30", "US2000", "DE40", "JP225"
    };
    
    for(int i = 0; i < ArraySize(baseSymbols); i++)
@@ -445,9 +446,18 @@ void CheckOrderQueue()
       // تحويل الرمز لصيغة MT5
       // Binance: BTCUSDT → BTCUSD
       // Twelve Data: XAU/USD → XAUUSD, EUR/USD → EURUSD
+      // ETFs/Indices: SPY → US500, QQQ → USTEC
       string baseSymbol = symbol;
       StringReplace(baseSymbol, "/", "");  // شيل / من XAU/USD → XAUUSD
       if(StringFind(baseSymbol, "USDT") > 0) StringReplace(baseSymbol, "USDT", "USD");
+      
+      // خريطة تحويل المؤشرات — ETF إلى رمز CFD البروكر
+      if(baseSymbol == "SPY")  baseSymbol = "US500";
+      else if(baseSymbol == "QQQ")  baseSymbol = "USTEC";
+      else if(baseSymbol == "DIA")  baseSymbol = "US30";
+      else if(baseSymbol == "IWM")  baseSymbol = "US2000";
+      else if(baseSymbol == "EWG")  baseSymbol = "DE40";
+      else if(baseSymbol == "EWJ")  baseSymbol = "JP225";
       
       // البحث التلقائي عن الرمز الصحيح عند البروكر
       string tradeSymbol = FindBrokerSymbol(baseSymbol);

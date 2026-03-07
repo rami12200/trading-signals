@@ -39,7 +39,9 @@ export default function RootLayout({
                 <NavLink href="/quickscalp">سكالبينج سريع</NavLink>
                 <NavLink href="/ict">🎯 القناص</NavLink>
                 <NavLink href="/bollinger">📊 البولنجر</NavLink>
+                <NavLink href="/spx">📈 SPX</NavLink>
                 <NavLink href="/smc">🏦 SMC</NavLink>
+                <NavLink href="/quant">🧠 الكمي</NavLink>
                 <NavLink href="/scalping">المضاربة</NavLink>
                 <NavLink href="/daily">يومي</NavLink>
                 <NavLink href="/weekly">أسبوعي</NavLink>
@@ -74,6 +76,7 @@ export default function RootLayout({
                     <Link href="/quickscalp" className="hover:text-white transition-colors">السكالبينج السريع</Link>
                     <Link href="/ict" className="hover:text-white transition-colors">🎯 القناص ICT</Link>
                     <Link href="/bollinger" className="hover:text-white transition-colors">📊 البولنجر باوند</Link>
+                    <Link href="/spx" className="hover:text-white transition-colors">📈 S&P 500</Link>
                     <Link href="/smc" className="hover:text-white transition-colors">🏦 Smart Money</Link>
                     <Link href="/scalping" className="hover:text-white transition-colors">المضاربة اللحظية</Link>
                     <Link href="/daily" className="hover:text-white transition-colors">التوصيات اليومية</Link>
@@ -137,7 +140,9 @@ function MobileMenu() {
           <MobileNavLink href="/quickscalp">سكالبينج سريع</MobileNavLink>
           <MobileNavLink href="/ict">🎯 القناص</MobileNavLink>
           <MobileNavLink href="/bollinger">📊 البولنجر</MobileNavLink>
+          <MobileNavLink href="/spx">📈 SPX</MobileNavLink>
           <MobileNavLink href="/smc">🏦 SMC</MobileNavLink>
+          <MobileNavLink href="/quant">🧠 الكمي</MobileNavLink>
           <MobileNavLink href="/scalping">المضاربة</MobileNavLink>
           <MobileNavLink href="/daily">يومي</MobileNavLink>
           <MobileNavLink href="/weekly">أسبوعي</MobileNavLink>

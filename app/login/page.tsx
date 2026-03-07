@@ -23,7 +23,8 @@ export default function LoginPage() {
 
     try {
       await signIn(email.toLowerCase().trim(), password)
-      router.push('/profile')
+      // router.push ما يحدّث الـ AuthProvider — نستخدم reload عشان يقرأ الـ session الجديدة
+      window.location.href = '/profile'
     } catch (err: any) {
       setError(err.message === 'Invalid login credentials'
         ? 'البريد الإلكتروني أو كلمة السر غير صحيحة'
