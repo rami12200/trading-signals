@@ -633,37 +633,29 @@ export default function QuantPage() {
           {/* ─── Dashboard Tab ───────────────────────────────────── */}
           {!loading && activeTab === 'dashboard' && currentData && (
             <>
-              {/* MT5 Execution Panel — Direction based on AI analysis */}
+              {/* MT5 Execution Panel */}
               {(() => {
+                const hasSignal = !!currentData.signal
                 const regime = currentData.regime
-                const isBearish = regime === 'TRENDING_DOWN' || regime === 'DISTRIBUTION'
-                const recommendedDir: 'BUY' | 'SELL' = isBearish ? 'SELL' : 'BUY'
                 const prob = currentData.probability
                 const atr = currentData.volatility.atr
                 const price = currentData.price
-
-                const createSignal = (dir: 'BUY' | 'SELL'): QuantSignal => ({
-                  id: `mt5-${dir.toLowerCase()}-${Date.now()}`,
-                  pair,
-                  direction: dir,
-                  entry: price,
-                  stopLoss: dir === 'BUY' ? price - atr * 1.5 : price + atr * 1.5,
-                  takeProfit: dir === 'BUY' ? price + atr * 3 : price - atr * 3,
-                  probability: prob,
-                  strengthLabel: prob >= 65 ? 'STRONG' : 'MODERATE',
-                  regime,
-                  layers: currentData.layers,
-                  timestamp: new Date().toISOString(),
-                  atr,
-                  riskReward: '1:2.0',
-                })
-
+                const bullishLayers = currentData.layers.filter((l: LayerResult) => l.direction === 'BULLISH').length
+                const bearishLayers = currentData.layers.filter((l: LayerResult) => l.direction === 'BEARISH').length
+                const recommendedDir: 'BUY' | 'SELL' = hasSignal
+                  ? currentData.signal!.direction
+                  : bearishLayers > bullishLayers ? 'SELL' : 'BUY'
+                const canExecute = hasSignal && !!user?.api_key && executingSignalId === null
 
                 return (
                   <div className="card"
                     style={{
-                      borderColor: recommendedDir === 'BUY' ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)',
-                      background: recommendedDir === 'BUY' ? 'rgba(16,185,129,0.03)' : 'rgba(239,68,68,0.03)',
+                      borderColor: hasSignal
+                        ? (recommendedDir === 'BUY' ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)')
+                        : 'rgba(255,255,255,0.06)',
+                      background: hasSignal
+                        ? (recommendedDir === 'BUY' ? 'rgba(16,185,129,0.03)' : 'rgba(239,68,68,0.03)')
+                        : 'transparent',
                     }}
                   >
                     {/* Header */}
@@ -671,12 +663,18 @@ export default function QuantPage() {
                       <div className="flex items-center gap-3">
                         <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-lg font-bold border`}
                           style={{
-                            background: recommendedDir === 'BUY' ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)',
-                            borderColor: recommendedDir === 'BUY' ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)',
-                            color: recommendedDir === 'BUY' ? '#34d399' : '#f87171',
+                            background: hasSignal
+                              ? (recommendedDir === 'BUY' ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.12)')
+                              : 'rgba(255,255,255,0.05)',
+                            borderColor: hasSignal
+                              ? (recommendedDir === 'BUY' ? 'rgba(16,185,129,0.25)' : 'rgba(239,68,68,0.25)')
+                              : 'rgba(255,255,255,0.1)',
+                            color: hasSignal
+                              ? (recommendedDir === 'BUY' ? '#34d399' : '#f87171')
+                              : '#6b7280',
                           }}
                         >
-                          {recommendedDir === 'BUY' ? '↗' : '↘'}
+                          {hasSignal ? (recommendedDir === 'BUY' ? '↗' : '↘') : '⏸'}
                         </div>
                         <div>
                           <h3 className="text-sm font-bold text-white flex items-center gap-2">
@@ -686,30 +684,39 @@ export default function QuantPage() {
                             </span>
                           </h3>
                           <p className="text-xs text-neutral-500 mt-0.5">
-                            التوصية: <span className={recommendedDir === 'BUY' ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>
-                              {recommendedDir === 'BUY' ? '🟢 شراء' : '🔴 بيع'}
-                            </span>
-                            {' — '}
-                            {REGIME_LABELS[regime] || regime}
-                            {' — '}
-                            احتمالية {prob}%
+                            {hasSignal ? (
+                              <>
+                                التوصية: <span className={recommendedDir === 'BUY' ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>
+                                  {recommendedDir === 'BUY' ? '🟢 شراء' : '🔴 بيع'}
+                                </span>
+                                {' — '}{REGIME_LABELS[regime] || regime}{' — '}احتمالية {prob}%
+                              </>
+                            ) : (
+                              <span className="text-neutral-500">
+                                {REGIME_LABELS[regime] || regime}{' — '}احتمالية {prob}% — بانتظار إشارة (65%+)
+                              </span>
+                            )}
                           </p>
                         </div>
                       </div>
                     </div>
 
-                    {/* Single Recommended Action Button */}
+                    {/* Execute Button */}
                     <button
-                      disabled={!user?.api_key || executingSignalId !== null}
-                      onClick={() => executeTrade(createSignal(recommendedDir))}
-                      className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-xl font-bold text-base transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] disabled:opacity-40 disabled:cursor-not-allowed"
+                      disabled={!canExecute}
+                      onClick={() => hasSignal && executeTrade(currentData.signal!)}
+                      className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-xl font-bold text-base transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:scale-100"
                       style={{
-                        background: recommendedDir === 'BUY' ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
+                        background: hasSignal
+                          ? (recommendedDir === 'BUY' ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)')
+                          : 'rgba(255,255,255,0.03)',
                         borderWidth: '1px',
-                        borderColor: recommendedDir === 'BUY' ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)',
-                        color: recommendedDir === 'BUY' ? '#34d399' : '#f87171',
-                        boxShadow: recommendedDir === 'BUY'
-                          ? '0 0 20px rgba(16,185,129,0.1)' : '0 0 20px rgba(239,68,68,0.1)',
+                        borderColor: hasSignal
+                          ? (recommendedDir === 'BUY' ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)')
+                          : 'rgba(255,255,255,0.08)',
+                        color: hasSignal
+                          ? (recommendedDir === 'BUY' ? '#34d399' : '#f87171')
+                          : '#6b7280',
                       }}
                     >
                       {executingSignalId !== null ? (
@@ -717,10 +724,15 @@ export default function QuantPage() {
                           <span className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" />
                           جاري التنفيذ...
                         </>
-                      ) : (
+                      ) : hasSignal ? (
                         <>
                           <span className="text-xl">{recommendedDir === 'BUY' ? '🚀' : '📉'}</span>
                           {recommendedDir === 'BUY' ? 'تنفيذ شراء' : 'تنفيذ بيع'} {PAIR_LABELS[pair]} عبر MT5
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-xl">⏸</span>
+                          لا توجد إشارة — الزر معطل
                         </>
                       )}
                     </button>
@@ -737,18 +749,18 @@ export default function QuantPage() {
                     )}
 
                     {/* Price info */}
-                    <div className="mt-3 flex items-center justify-between text-[11px] text-neutral-500">
-                      <span>الدخول: <span className="font-mono text-neutral-300">${price.toFixed(2)}</span></span>
-                      <span>
-                        SL: <span className="font-mono text-red-400">
-                          ${(recommendedDir === 'BUY' ? price - atr * 1.5 : price + atr * 1.5).toFixed(2)}
+                    {hasSignal && (
+                      <div className="mt-3 flex items-center justify-between text-[11px] text-neutral-500">
+                        <span>الدخول: <span className="font-mono text-neutral-300">${currentData.signal!.entry.toFixed(2)}</span></span>
+                        <span>
+                          SL: <span className="font-mono text-red-400">${currentData.signal!.stopLoss.toFixed(2)}</span>
+                          {' | '}
+                          TP: <span className="font-mono text-emerald-400">${currentData.signal!.takeProfit.toFixed(2)}</span>
+                          {' | '}
+                          R:R <span className="font-mono text-neutral-300">{currentData.signal!.riskReward}</span>
                         </span>
-                        {' | '}
-                        TP: <span className="font-mono text-emerald-400">
-                          ${(recommendedDir === 'BUY' ? price + atr * 3 : price - atr * 3).toFixed(2)}
-                        </span>
-                      </span>
-                    </div>
+                      </div>
+                    )}
 
                     {!user?.api_key && (
                       <div className="mt-3 p-3 rounded-lg bg-red-500/5 border border-red-500/10 text-xs text-red-400">
@@ -760,19 +772,13 @@ export default function QuantPage() {
               })()}
 
               {/* Active Signal Card */}
-              {currentData.signal ? (
+              {currentData.signal && (
                 <SignalCard
                   signal={currentData.signal}
                   onExecute={executeTrade}
                   isExecuting={executingSignalId === currentData.signal.id}
                   alreadyExecuted={activeTrades.some(t => t.signalId === currentData.signal!.id)}
                 />
-              ) : (
-                <div className="card text-center py-8 border-dashed border-white/[0.08]">
-                  <p className="text-3xl mb-3">🔍</p>
-                  <p className="text-neutral-400 text-sm">المحرك الكمي يحلل السوق — لا توجد إشارة حالياً</p>
-                  <p className="text-neutral-600 text-xs mt-1">الاحتمالية الحالية: {currentData.probability}% — الإشارة تطلع عند 65%+</p>
-                </div>
               )}
 
               {/* ─── Active Trades Panel ─────────────────────────── */}
