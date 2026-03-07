@@ -242,6 +242,62 @@ export default function QuantPage() {
   const [executeStatus, setExecuteStatus] = useState<{ type: 'success' | 'error'; msg: string } | null>(null)
   const scanMsgIdx = useRef(0)
   const knownSignalIds = useRef<Set<string>>(new Set())
+  const [soundEnabled, setSoundEnabled] = useState(true)
+  const [signalFlash, setSignalFlash] = useState<{ pair: string; direction: 'BUY' | 'SELL' } | null>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+
+  // Play institutional alert tone using Web Audio API
+  const playSignalAlert = useCallback((direction: 'BUY' | 'SELL') => {
+    try {
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
+      }
+      const ctx = audioCtxRef.current
+      if (ctx.state === 'suspended') ctx.resume()
+
+      const isBuy = direction === 'BUY'
+
+      // Sequence of tones
+      const tones = isBuy
+        ? [{ freq: 523, dur: 0.12 }, { freq: 659, dur: 0.12 }, { freq: 784, dur: 0.20 }]  // C5→E5→G5 ascending
+        : [{ freq: 784, dur: 0.12 }, { freq: 659, dur: 0.12 }, { freq: 523, dur: 0.20 }]  // G5→E5→C5 descending
+
+      let startTime = ctx.currentTime
+      for (const tone of tones) {
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.connect(gain)
+        gain.connect(ctx.destination)
+        osc.type = 'sine'
+        osc.frequency.setValueAtTime(tone.freq, startTime)
+        gain.gain.setValueAtTime(0.4, startTime)
+        gain.gain.exponentialRampToValueAtTime(0.001, startTime + tone.dur)
+        osc.start(startTime)
+        osc.stop(startTime + tone.dur)
+        startTime += tone.dur + 0.04
+      }
+
+      // Final resonant chord
+      const chord = ctx.createOscillator()
+      const chordGain = ctx.createGain()
+      chord.connect(chordGain)
+      chordGain.connect(ctx.destination)
+      chord.type = 'triangle'
+      chord.frequency.setValueAtTime(isBuy ? 1046 : 440, startTime)
+      chordGain.gain.setValueAtTime(0.25, startTime)
+      chordGain.gain.exponentialRampToValueAtTime(0.001, startTime + 0.5)
+      chord.start(startTime)
+      chord.stop(startTime + 0.5)
+    } catch {
+      // Audio not supported — silently ignore
+    }
+  }, [])
+
+  // Trigger visual flash banner
+  const triggerFlash = useCallback((pair: string, direction: 'BUY' | 'SELL') => {
+    setSignalFlash({ pair, direction })
+    setTimeout(() => setSignalFlash(null), 4000)
+  }, [])
 
   // Execute a trade from a signal — sends to API for EA pickup + local tracking
   const executeRef = useRef(false)
@@ -389,7 +445,7 @@ export default function QuantPage() {
 
       for (const r of results) {
         newData[r.pair] = r.data
-        // Track new signals
+        // Track new signals + trigger alert
         if (r.data.signal && !knownSignalIds.current.has(r.data.signal.id)) {
           knownSignalIds.current.add(r.data.signal.id)
           newHistory.unshift({
@@ -398,6 +454,9 @@ export default function QuantPage() {
             pnlPct: 0,
             result: 'ACTIVE',
           })
+          // Sound + visual alert
+          if (soundEnabled) playSignalAlert(r.data.signal.direction)
+          triggerFlash(r.pair, r.data.signal.direction)
         }
       }
 
@@ -471,7 +530,7 @@ export default function QuantPage() {
       setError(err.message)
       setLoading(false)
     }
-  }, [interval, signalHistory])
+  }, [interval, signalHistory, soundEnabled, playSignalAlert, triggerFlash])
 
   useEffect(() => {
     fetchData()
@@ -545,8 +604,56 @@ export default function QuantPage() {
                   </button>
                 ))}
               </div>
+
+              {/* Sound alert toggle */}
+              <button
+                onClick={() => setSoundEnabled(v => !v)}
+                title={soundEnabled ? 'إيقاف التنبيه الصوتي' : 'تشغيل التنبيه الصوتي'}
+                className={`flex items-center gap-2 px-3 py-2 rounded-xl border text-xs font-medium transition-all ${
+                  soundEnabled
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20'
+                    : 'bg-surface/80 border-white/[0.06] text-neutral-500 hover:text-neutral-300'
+                }`}
+              >
+                {soundEnabled ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M13 3.5v17a1 1 0 01-1.6.8L6 17H3a1 1 0 01-1-1V8a1 1 0 011-1h3l5.4-4.3A1 1 0 0113 3.5zM18 12a5 5 0 00-2.5-4.33l1-1.73A7 7 0 0121 12a7 7 0 01-4.5 6.5l-1-1.73A5 5 0 0018 12z"/>
+                  </svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M13 3.5v17a1 1 0 01-1.6.8L6 17H3a1 1 0 01-1-1V8a1 1 0 011-1h3l5.4-4.3A1 1 0 0113 3.5zM22.7 9.3l-1.4-1.4-2.3 2.3-2.3-2.3-1.4 1.4 2.3 2.3-2.3 2.3 1.4 1.4 2.3-2.3 2.3 2.3 1.4-1.4-2.3-2.3z"/>
+                  </svg>
+                )}
+                {soundEnabled ? 'صوت' : 'صامت'}
+              </button>
             </div>
           </div>
+
+          {/* ─── Signal Flash Alert Banner ────────────────────────── */}
+          {signalFlash && (
+            <div className={`rounded-2xl border px-6 py-4 flex items-center gap-4 animate-pulse-once ${
+              signalFlash.direction === 'BUY'
+                ? 'bg-emerald-500/10 border-emerald-500/40 shadow-[0_0_24px_rgba(16,185,129,0.25)]'
+                : 'bg-red-500/10 border-red-500/40 shadow-[0_0_24px_rgba(239,68,68,0.25)]'
+            }`}>
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-xl font-bold border ${
+                signalFlash.direction === 'BUY'
+                  ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400'
+                  : 'bg-red-500/20 border-red-500/40 text-red-400'
+              }`}>
+                {signalFlash.direction === 'BUY' ? '▲' : '▼'}
+              </div>
+              <div className="flex-1">
+                <p className={`text-base font-bold ${signalFlash.direction === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>
+                  🔔 إشارة جديدة — {PAIR_LABELS[signalFlash.pair] || signalFlash.pair}
+                </p>
+                <p className="text-sm text-neutral-300">
+                  {signalFlash.direction === 'BUY' ? 'فرصة شراء — راجع لوحة التنفيذ' : 'فرصة بيع — راجع لوحة التنفيذ'}
+                </p>
+              </div>
+              <button onClick={() => setSignalFlash(null)} className="text-neutral-500 hover:text-neutral-300 text-lg px-2">✕</button>
+            </div>
+          )}
 
           {/* ─── Live Prices + AI Status ─────────────────────────── */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
