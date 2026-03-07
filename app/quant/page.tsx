@@ -245,6 +245,11 @@ export default function QuantPage() {
   const [soundEnabled, setSoundEnabled] = useState(true)
   const [signalFlash, setSignalFlash] = useState<{ pair: string; direction: 'BUY' | 'SELL' } | null>(null)
   const audioCtxRef = useRef<AudioContext | null>(null)
+  const LOT_PRESETS = [0.01, 0.1, 0.5]
+  const defaultLot = user?.auto_trade_lot_size || 0.01
+  const [selectedLot, setSelectedLot] = useState<number>(defaultLot)
+  const [customLot, setCustomLot] = useState<string>('')
+  const [isCustomLot, setIsCustomLot] = useState(false)
 
   // Play institutional alert tone using Web Audio API
   const playSignalAlert = useCallback((direction: 'BUY' | 'SELL') => {
@@ -323,7 +328,7 @@ export default function QuantPage() {
             entry: signal.entry,
             stopLoss: signal.stopLoss,
             takeProfit: signal.takeProfit,
-            lotSize: user?.auto_trade_lot_size || 0.01,
+            lotSize: selectedLot,
           }),
         })
         const json = await res.json()
@@ -373,7 +378,7 @@ export default function QuantPage() {
     }
     setExecutingSignalId(null)
     executeRef.current = false
-  }, [user])
+  }, [user, selectedLot])
 
   // Close a trade manually
   const closeTrade = useCallback((tradeId: string, currentPrice: number) => {
@@ -808,9 +813,70 @@ export default function QuantPage() {
                       </div>
                     </div>
 
+                    {/* ─── Lot Size Selector ─────────────────────── */}
+                    <div className="mb-4 p-3 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs text-neutral-400 font-medium">حجم اللوت</span>
+                        <span className="text-xs font-mono font-bold text-white">
+                          {isCustomLot ? (parseFloat(customLot) || 0).toFixed(2) : selectedLot.toFixed(2)}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {LOT_PRESETS.map(lot => (
+                          <button
+                            key={lot}
+                            onClick={() => { setSelectedLot(lot); setIsCustomLot(false); setCustomLot('') }}
+                            className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all border ${
+                              !isCustomLot && selectedLot === lot
+                                ? 'bg-accent/20 border-accent/40 text-accent'
+                                : 'bg-white/[0.04] border-white/[0.08] text-neutral-400 hover:text-white hover:border-white/20'
+                            }`}
+                          >
+                            {lot}
+                          </button>
+                        ))}
+                        {/* Custom input */}
+                        <div className={`flex-1 relative flex items-center rounded-lg border transition-all ${
+                          isCustomLot
+                            ? 'bg-accent/10 border-accent/40'
+                            : 'bg-white/[0.04] border-white/[0.08]'
+                        }`}>
+                          <input
+                            type="number"
+                            min="0.01"
+                            max="10"
+                            step="0.01"
+                            placeholder="مخصص"
+                            value={customLot}
+                            onChange={e => {
+                              setCustomLot(e.target.value)
+                              setIsCustomLot(true)
+                              const v = parseFloat(e.target.value)
+                              if (!isNaN(v) && v > 0) setSelectedLot(v)
+                            }}
+                            onFocus={() => setIsCustomLot(true)}
+                            className="w-full bg-transparent text-xs font-bold text-center text-white placeholder-neutral-600 py-2 px-1 outline-none"
+                            style={{ MozAppearance: 'textfield' } as any}
+                          />
+                        </div>
+                      </div>
+                      {/* Warning for large lots */}
+                      {selectedLot >= 0.5 && (
+                        <p className="mt-2 text-[10px] text-yellow-400/80 flex items-center gap-1">
+                          ⚠️ لوت كبير — تأكد من إدارة المخاطر
+                        </p>
+                      )}
+                      {/* Invalid custom warning */}
+                      {isCustomLot && (parseFloat(customLot) <= 0 || isNaN(parseFloat(customLot))) && (
+                        <p className="mt-2 text-[10px] text-red-400/80 flex items-center gap-1">
+                          ✕ أدخل قيمة أكبر من 0
+                        </p>
+                      )}
+                    </div>
+
                     {/* Execute Button */}
                     <button
-                      disabled={!canExecute}
+                      disabled={!canExecute || (isCustomLot && (parseFloat(customLot) <= 0 || isNaN(parseFloat(customLot))))}
                       onClick={() => hasSignal && executeTrade(currentData.signal!)}
                       className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-xl font-bold text-base transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:scale-100"
                       style={{
