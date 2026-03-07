@@ -771,12 +771,11 @@ export default function QuantPage() {
                 )
               })()}
 
-              {/* Active Signal Card */}
+              {/* Active Signal Card — display only, no execute button */}
               {currentData.signal && (
                 <SignalCard
                   signal={currentData.signal}
-                  onExecute={executeTrade}
-                  isExecuting={executingSignalId === currentData.signal.id}
+                  isExecuting={false}
                   alreadyExecuted={activeTrades.some(t => t.signalId === currentData.signal!.id)}
                 />
               )}
