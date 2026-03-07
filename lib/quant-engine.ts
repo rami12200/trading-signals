@@ -126,6 +126,13 @@ export interface RealOrderFlow {
   sellVolume: number
 }
 
+export interface CandleDelta {
+  time: number
+  buyVolume: number
+  sellVolume: number
+  delta: number
+}
+
 export interface BacktestResult {
   totalSignals: number
   wins: number
@@ -289,7 +296,7 @@ function detectSwingPoints(candles: Candle[], lookback: number = 5): SwingPoint[
 }
 
 function analyzeStructure(swings: SwingPoint[]): LayerResult {
-  if (swings.length < 4) return { name: 'Market Structure', score: 50, weight: 0.10, direction: 'NEUTRAL', detail: 'Insufficient swing data' }
+  if (swings.length < 4) return { name: 'Market Structure', score: 50, weight: 0.08, direction: 'NEUTRAL', detail: 'Insufficient swing data' }
   const recent = swings.slice(-6)
   const lastHighs = recent.filter(s => s.type === 'HH' || s.type === 'LH')
   const lastLows = recent.filter(s => s.type === 'HL' || s.type === 'LL')
@@ -304,13 +311,13 @@ function analyzeStructure(swings: SwingPoint[]): LayerResult {
 
   if (bullScore > bearScore) {
     const score = Math.min(95, 60 + bullScore * 10)
-    return { name: 'Market Structure', score, weight: 0.10, direction: 'BULLISH', detail: `HH+HL pattern (${bullScore}/${bullScore + bearScore})` }
+    return { name: 'Market Structure', score, weight: 0.08, direction: 'BULLISH', detail: `HH+HL pattern (${bullScore}/${bullScore + bearScore})` }
   }
   if (bearScore > bullScore) {
     const score = Math.min(95, 60 + bearScore * 10)
-    return { name: 'Market Structure', score, weight: 0.10, direction: 'BEARISH', detail: `LH+LL pattern (${bearScore}/${bullScore + bearScore})` }
+    return { name: 'Market Structure', score, weight: 0.08, direction: 'BEARISH', detail: `LH+LL pattern (${bearScore}/${bullScore + bearScore})` }
   }
-  return { name: 'Market Structure', score: 50, weight: 0.10, direction: 'NEUTRAL', detail: 'Mixed structure' }
+  return { name: 'Market Structure', score: 50, weight: 0.08, direction: 'NEUTRAL', detail: 'Mixed structure' }
 }
 
 // ─── Layer 3: Liquidity Cluster Detection ────────────────────────────────────
@@ -375,81 +382,107 @@ function analyzeLiquidity(clusters: LiquidityCluster[], candles: Candle[]): Laye
   const recentSweepDown = sweptClusters.some(c => c.sweepDirection === 'DOWN') && currentPrice > prevPrice
 
   if (recentSweepUp) {
-    return { name: 'Liquidity Sweep', score: 80, weight: 0.15, direction: 'BEARISH', detail: `Upside liquidity swept — reversal potential` }
+    return { name: 'Liquidity Sweep', score: 80, weight: 0.14, direction: 'BEARISH', detail: `Upside liquidity swept — reversal potential` }
   }
   if (recentSweepDown) {
-    return { name: 'Liquidity Sweep', score: 80, weight: 0.15, direction: 'BULLISH', detail: `Downside liquidity swept — reversal potential` }
+    return { name: 'Liquidity Sweep', score: 80, weight: 0.14, direction: 'BULLISH', detail: `Downside liquidity swept — reversal potential` }
   }
 
   // Near liquidity zone
   const nearCluster = clusters.find(c => Math.abs(c.price - currentPrice) / currentPrice < 0.002)
   if (nearCluster) {
-    return { name: 'Liquidity Sweep', score: 60, weight: 0.15, direction: 'NEUTRAL', detail: `Price near ${nearCluster.type} @ ${nearCluster.price.toFixed(2)}` }
+    return { name: 'Liquidity Sweep', score: 60, weight: 0.14, direction: 'NEUTRAL', detail: `Price near ${nearCluster.type} @ ${nearCluster.price.toFixed(2)}` }
   }
 
-  return { name: 'Liquidity Sweep', score: 40, weight: 0.15, direction: 'NEUTRAL', detail: 'No active liquidity sweep' }
+  return { name: 'Liquidity Sweep', score: 40, weight: 0.14, direction: 'NEUTRAL', detail: 'No active liquidity sweep' }
 }
 
-// ─── Layer 4: Order Flow Analysis ────────────────────────────────────────────
+// ─── Layer 4: Order Flow Analysis (Delta Model) ─────────────────────────────
 
-function analyzeOrderFlow(candles: Candle[], realFlow?: RealOrderFlow): LayerResult & { buyVol: number; sellVol: number; delta: number; dominance: 'BUY' | 'SELL' | 'NEUTRAL'; spike: boolean } {
-  let buyVol: number, sellVol: number
+function estimateCandleDeltas(candles: Candle[]): CandleDelta[] {
+  return candles.map(c => {
+    const bullRatio = c.close >= c.open ? 0.65 : 0.35
+    const bv = c.volume * bullRatio
+    const sv = c.volume * (1 - bullRatio)
+    return { time: c.time, buyVolume: bv, sellVolume: sv, delta: bv - sv }
+  })
+}
 
+function analyzeOrderFlow(candles: Candle[], realFlow?: RealOrderFlow, realDeltas?: CandleDelta[]): LayerResult & { buyVol: number; sellVol: number; delta: number; dominance: 'BUY' | 'SELL' | 'NEUTRAL'; spike: boolean } {
+  const isReal = !!(realDeltas && realDeltas.length > 0) || !!(realFlow && realFlow.buyVolume > 0)
+
+  const deltas: CandleDelta[] = (realDeltas && realDeltas.length > 0)
+    ? realDeltas.slice(-10)
+    : estimateCandleDeltas(candles.slice(-10))
+
+  let buyVol = 0, sellVol = 0
   if (realFlow && realFlow.buyVolume > 0) {
     buyVol = realFlow.buyVolume
     sellVol = realFlow.sellVolume
   } else {
-    const recent = candles.slice(-10)
-    buyVol = 0; sellVol = 0
-    for (const c of recent) {
-      if (c.close >= c.open) {
-        buyVol += c.volume * 0.65
-        sellVol += c.volume * 0.35
-      } else {
-        sellVol += c.volume * 0.65
-        buyVol += c.volume * 0.35
-      }
-    }
+    for (const d of deltas) { buyVol += d.buyVolume; sellVol += d.sellVolume }
   }
 
   const delta = buyVol - sellVol
   const totalVol = buyVol + sellVol
   const ratio = totalVol > 0 ? buyVol / totalVol : 0.5
+  const dominance: 'BUY' | 'SELL' | 'NEUTRAL' = ratio > 0.55 ? 'BUY' : ratio < 0.45 ? 'SELL' : 'NEUTRAL'
 
-  const buyDominance = ratio > 0.55
-  const sellDominance = ratio < 0.45
-  const strongBuy = ratio > 0.62
-  const strongSell = ratio < 0.38
-  const dominance: 'BUY' | 'SELL' | 'NEUTRAL' = buyDominance ? 'BUY' : sellDominance ? 'SELL' : 'NEUTRAL'
+  // Delta shift detection: compare recent 3 candles vs previous 3
+  const recentDeltas = deltas.slice(-3)
+  const prevDeltas = deltas.slice(-6, -3)
+  const recentAvgDelta = recentDeltas.length > 0 ? recentDeltas.reduce((s, d) => s + d.delta, 0) / recentDeltas.length : 0
+  const prevAvgDelta = prevDeltas.length > 0 ? prevDeltas.reduce((s, d) => s + d.delta, 0) / prevDeltas.length : 0
+  const deltaShift = recentAvgDelta - prevAvgDelta
+  const deltaAccelerating = Math.abs(deltaShift) > 0 && Math.sign(recentAvgDelta) === Math.sign(deltaShift)
+  const deltaReversing = prevAvgDelta !== 0 && Math.sign(recentAvgDelta) !== Math.sign(prevAvgDelta)
 
-  const recent = candles.slice(-10)
+  // Volume spike
   const avgVol = candles.slice(-50, -10).reduce((s, c) => s + c.volume, 0) / Math.max(1, candles.slice(-50, -10).length)
-  const recentAvgVol = recent.reduce((s, c) => s + c.volume, 0) / recent.length
+  const recentAvgVol = candles.slice(-10).reduce((s, c) => s + c.volume, 0) / candles.slice(-10).length
   const spike = recentAvgVol > avgVol * 1.5
+
+  // Consecutive delta: count how many of last 5 candles have same-sign delta
+  const last5 = deltas.slice(-5)
+  const consecutiveBull = last5.filter(d => d.delta > 0).length
+  const consecutiveBear = last5.filter(d => d.delta < 0).length
 
   let score = 50
   let direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL'
 
-  if (strongBuy) { score = 78 + (spike ? 15 : 0); direction = 'BULLISH' }
-  else if (strongSell) { score = 78 + (spike ? 15 : 0); direction = 'BEARISH' }
-  else if (buyDominance) { score = 62 + (spike ? 15 : 0); direction = 'BULLISH' }
-  else if (sellDominance) { score = 62 + (spike ? 15 : 0); direction = 'BEARISH' }
+  if (ratio > 0.62) { score = 75; direction = 'BULLISH' }
+  else if (ratio < 0.38) { score = 75; direction = 'BEARISH' }
+  else if (ratio > 0.55) { score = 62; direction = 'BULLISH' }
+  else if (ratio < 0.45) { score = 62; direction = 'BEARISH' }
 
-  const isReal = realFlow && realFlow.buyVolume > 0
+  // Delta acceleration bonus
+  if (deltaAccelerating && direction !== 'NEUTRAL') score += 8
+  // Delta reversal — strong contrarian signal
+  if (deltaReversing && Math.abs(recentAvgDelta) > Math.abs(prevAvgDelta) * 0.5) {
+    direction = recentAvgDelta > 0 ? 'BULLISH' : 'BEARISH'
+    score = Math.max(score, 72)
+  }
+  // Consecutive delta bonus
+  if (consecutiveBull >= 4 && direction === 'BULLISH') score += 6
+  if (consecutiveBear >= 4 && direction === 'BEARISH') score += 6
+  // Volume spike bonus
+  if (spike) score += 10
+
+  const shiftLabel = deltaAccelerating ? 'ACCEL' : deltaReversing ? 'REVERSAL' : 'STEADY'
 
   return {
     name: 'Order Flow',
     score: Math.min(95, score),
-    weight: isReal ? 0.18 : 0.12,
+    weight: isReal ? 0.20 : 0.12,
     direction,
-    detail: `Delta: ${delta > 0 ? '+' : ''}${(delta / 1e6).toFixed(2)}M | ${dominance}${spike ? ' + SPIKE' : ''}${isReal ? ' [REAL]' : ' [EST]'}`,
+    detail: `Delta: ${delta > 0 ? '+' : ''}${(delta / 1e6).toFixed(2)}M | ${dominance} | ${shiftLabel}${spike ? ' + SPIKE' : ''}${isReal ? ' [REAL]' : ' [EST]'}`,
     buyVol, sellVol, delta, dominance, spike
   }
 }
 
-// ─── Layer 5: Order Book Microstructure ──────────────────────────────────────
+// ─── Layer 5: Order Book Microstructure (Deep Analysis) ──────────────────────
 
-function analyzeOrderBook(orderBook: OrderBook): LayerResult & { bidWall: number; askWall: number; imbalance: number; imbalanceDir: 'BUY' | 'SELL' | 'NEUTRAL' } {
+function analyzeOrderBook(orderBook: OrderBook, currentPrice?: number): LayerResult & { bidWall: number; askWall: number; imbalance: number; imbalanceDir: 'BUY' | 'SELL' | 'NEUTRAL' } {
   const bidTotal = orderBook.bids.reduce((s, b) => s + b.qty * b.price, 0)
   const askTotal = orderBook.asks.reduce((s, a) => s + a.qty * a.price, 0)
   const total = bidTotal + askTotal
@@ -458,20 +491,54 @@ function analyzeOrderBook(orderBook: OrderBook): LayerResult & { bidWall: number
   const bidWall = Math.max(...orderBook.bids.map(b => b.qty * b.price))
   const askWall = Math.max(...orderBook.asks.map(a => a.qty * a.price))
 
+  // Cumulative depth analysis — split into near (<0.5% from price) and far zones
+  const price = currentPrice || (orderBook.bids.length > 0 ? orderBook.bids[0].price : 0)
+  const nearThreshold = price * 0.005
+  const nearBids = orderBook.bids.filter(b => price - b.price <= nearThreshold).reduce((s, b) => s + b.qty * b.price, 0)
+  const nearAsks = orderBook.asks.filter(a => a.price - price <= nearThreshold).reduce((s, a) => s + a.qty * a.price, 0)
+  const nearTotal = nearBids + nearAsks
+  const nearImbalance = nearTotal > 0 ? (nearBids - nearAsks) / nearTotal : 0
+
+  // Spoofing detection: single level > 40% of its side
+  const bidLevels = orderBook.bids.map(b => b.qty * b.price)
+  const askLevels = orderBook.asks.map(a => a.qty * a.price)
+  const maxBidLevel = Math.max(...bidLevels)
+  const maxAskLevel = Math.max(...askLevels)
+  const bidSpoofSuspect = bidTotal > 0 && maxBidLevel / bidTotal > 0.40
+  const askSpoofSuspect = askTotal > 0 && maxAskLevel / askTotal > 0.40
+
+  // Weighted imbalance: near zone has more weight
+  const weightedImbalance = nearImbalance * 0.65 + imbalance * 0.35
+
   let direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL'
   let score = 50
-  const imbalanceDir: 'BUY' | 'SELL' | 'NEUTRAL' = imbalance > 0.15 ? 'BUY' : imbalance < -0.15 ? 'SELL' : 'NEUTRAL'
+  const imbalanceDir: 'BUY' | 'SELL' | 'NEUTRAL' = weightedImbalance > 0.10 ? 'BUY' : weightedImbalance < -0.10 ? 'SELL' : 'NEUTRAL'
 
-  if (imbalance > 0.15) { direction = 'BULLISH'; score = 60 + Math.min(30, imbalance * 100) }
-  else if (imbalance < -0.15) { direction = 'BEARISH'; score = 60 + Math.min(30, Math.abs(imbalance) * 100) }
+  if (weightedImbalance > 0.10) {
+    direction = 'BULLISH'
+    score = 60 + Math.min(30, Math.abs(weightedImbalance) * 120)
+  } else if (weightedImbalance < -0.10) {
+    direction = 'BEARISH'
+    score = 60 + Math.min(30, Math.abs(weightedImbalance) * 120)
+  }
+
+  // Penalize spoofing suspicion
+  if ((direction === 'BULLISH' && bidSpoofSuspect) || (direction === 'BEARISH' && askSpoofSuspect)) {
+    score = Math.max(50, score - 12)
+  }
+
+  // Near-zone dominance bonus
+  if (Math.abs(nearImbalance) > 0.25 && Math.sign(nearImbalance) === Math.sign(weightedImbalance)) {
+    score += 8
+  }
 
   return {
     name: 'Order Book',
     score: Math.min(95, score),
-    weight: 0.10,
+    weight: 0.12,
     direction,
-    detail: `Imbalance: ${(imbalance * 100).toFixed(1)}% | Bid wall: $${(bidWall / 1e6).toFixed(2)}M | Ask wall: $${(askWall / 1e6).toFixed(2)}M`,
-    bidWall, askWall, imbalance, imbalanceDir
+    detail: `Near: ${(nearImbalance * 100).toFixed(1)}% | Total: ${(imbalance * 100).toFixed(1)}% | Bid: $${(bidWall / 1e6).toFixed(2)}M | Ask: $${(askWall / 1e6).toFixed(2)}M${bidSpoofSuspect || askSpoofSuspect ? ' ⚠SPOOF' : ''}`,
+    bidWall, askWall, imbalance: weightedImbalance, imbalanceDir
   }
 }
 
@@ -538,7 +605,7 @@ function analyzeOpenInterest(oiCurrent: number, oiPrevious: number, priceChange:
   return {
     name: 'Open Interest',
     score: Math.min(95, score),
-    weight: 0.10,
+    weight: 0.11,
     direction,
     detail: `OI Δ: ${changePct > 0 ? '+' : ''}${changePct.toFixed(2)}% | Price Δ: ${priceChange > 0 ? '+' : ''}${priceChange.toFixed(2)}% | ${correlation}`,
     current: oiCurrent, change, changePct, correlation
@@ -565,7 +632,7 @@ function analyzeFundingRate(rate: number): LayerResult & { rate: number; sentime
   return {
     name: 'Funding Rate',
     score: Math.min(95, score),
-    weight: 0.10,
+    weight: 0.09,
     direction,
     detail: `Rate: ${(rate * 100).toFixed(4)}% | ${sentiment}`,
     rate, sentiment
@@ -612,14 +679,14 @@ function analyzeMomentum(candles: Candle[]): LayerResult & { ema9: number; ema21
   return {
     name: 'Momentum',
     score: Math.min(95, score),
-    weight: 0.10,
+    weight: 0.07,
     direction,
     detail: `EMA9 ${e9 > e21 ? '>' : '<'} EMA21 | RSI: ${rsiVal.toFixed(1)} | MACD: ${macdH > 0 ? '+' : ''}${macdH.toFixed(4)}`,
     ema9: e9, ema21: e21, rsiVal, macdLine: last(macdData.line), macdSignal: last(macdData.signal), macdHist: macdH
   }
 }
 
-// ─── Layer 10: Volatility Compression ────────────────────────────────────────
+// ─── Layer 10: Volatility Compression + Squeeze Breakout Detection ───────────
 
 function analyzeVolatility(candles: Candle[]): LayerResult & { atrVal: number; bbUpper: number; bbLower: number; bbWidth: number; squeeze: boolean } {
   const closes = candles.map(c => c.close)
@@ -629,27 +696,59 @@ function analyzeVolatility(candles: Candle[]): LayerResult & { atrVal: number; b
   const currentATR = last(atrValues)
   const avgATR = atrValues.slice(-30).reduce((a, b) => a + b, 0) / Math.min(30, atrValues.length)
   const bbW = last(bb.width)
-  const avgBBW = bb.width.filter(w => !isNaN(w)).slice(-30).reduce((a, b) => a + b, 0) / 30
+  const validWidths = bb.width.filter(w => !isNaN(w))
+  const avgBBW = validWidths.slice(-30).reduce((a, b) => a + b, 0) / Math.min(30, validWidths.length)
   const squeeze = bbW < avgBBW * 0.7 && currentATR < avgATR * 0.7
+
+  // Check if a squeeze was active in the last 5 candles
+  const recentWidths = validWidths.slice(-8)
+  const wasSqueezing = recentWidths.slice(0, 5).some((w, i) => {
+    const localAvg = validWidths.slice(Math.max(0, validWidths.length - 30 - 5 + i), validWidths.length - 5 + i)
+      .reduce((a, b) => a + b, 0) / 30
+    return w < localAvg * 0.7
+  })
+  const isExpanding = bbW > avgBBW * 0.9 && wasSqueezing
+
+  // Breakout direction: price breaking above/below bands after squeeze
+  const currentClose = last(candles).close
+  const bbUp = last(bb.upper)
+  const bbLow = last(bb.lower)
+  const bbMid = (bbUp + bbLow) / 2
 
   let score = 50
   let direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL'
+  let stateLabel = 'Normal'
+
   if (squeeze) {
-    score = 75
-    direction = 'NEUTRAL' // direction TBD on breakout
-  } else if (bbW > avgBBW * 1.3) {
     score = 60
-    const recentDir = last(candles).close > prev(candles, 3).close ? 'BULLISH' : 'BEARISH'
-    direction = recentDir
+    direction = 'NEUTRAL'
+    stateLabel = 'SQUEEZE'
+  }
+
+  if (isExpanding) {
+    // Squeeze just fired — detect breakout direction
+    if (currentClose > bbMid) {
+      direction = 'BULLISH'
+      score = currentClose >= bbUp * 0.998 ? 88 : 78
+      stateLabel = 'SQUEEZE BREAKOUT ↑'
+    } else {
+      direction = 'BEARISH'
+      score = currentClose <= bbLow * 1.002 ? 88 : 78
+      stateLabel = 'SQUEEZE BREAKOUT ↓'
+    }
+  } else if (!squeeze && bbW > avgBBW * 1.3) {
+    score = 60
+    direction = last(candles).close > prev(candles, 3).close ? 'BULLISH' : 'BEARISH'
+    stateLabel = 'EXPANDING'
   }
 
   return {
     name: 'Volatility',
     score: Math.min(95, score),
-    weight: 0.10,
+    weight: isExpanding ? 0.14 : 0.08,
     direction,
-    detail: `BB Width: ${bbW.toFixed(3)}% | ATR: ${currentATR.toFixed(2)} | ${squeeze ? 'SQUEEZE DETECTED' : 'Normal'}`,
-    atrVal: currentATR, bbUpper: last(bb.upper), bbLower: last(bb.lower), bbWidth: bbW, squeeze
+    detail: `BB: ${bbW.toFixed(3)}% | ATR: ${currentATR.toFixed(2)} | ${stateLabel}`,
+    atrVal: currentATR, bbUpper: bbUp, bbLower: bbLow, bbWidth: bbW, squeeze: squeeze || isExpanding
   }
 }
 
@@ -701,6 +800,13 @@ function computeProbability(layers: LayerResult[], regime: MarketRegime): { prob
   const agreeCount = direction === 'BUY' ? bullishCount : bearishCount
   if (agreeCount >= 6) probability = Math.min(100, probability + 8)
   else if (agreeCount >= 5) probability = Math.min(100, probability + 5)
+
+  // Real data confirmation: Order Flow + Order Book + OI all agree
+  const realDataLayers = ['Order Flow', 'Order Book', 'Open Interest']
+  const targetDir = direction === 'BUY' ? 'BULLISH' : 'BEARISH'
+  const realAgreeing = layers.filter(l => realDataLayers.includes(l.name) && l.direction === targetDir).length
+  if (realAgreeing >= 3) probability = Math.min(100, probability + 7)
+  else if (realAgreeing >= 2) probability = Math.min(100, probability + 3)
 
   // Too many neutrals = low conviction
   if (neutralCount >= 5) probability = Math.max(0, probability - 8)
@@ -824,7 +930,7 @@ export function runQuantAnalysis(
   const structureLayer = analyzeStructure(swingPoints)
   const liquidityLayer = analyzeLiquidity(liquidityClusters, candles)
   const orderFlowLayer = analyzeOrderFlow(candles, realOrderFlow)
-  const orderBookLayer = analyzeOrderBook(orderBook)
+  const orderBookLayer = analyzeOrderBook(orderBook, price)
   const oiChangePct = oiPrevious > 0 ? ((oiCurrent - oiPrevious) / oiPrevious) * 100 : 0
   const liquidationLayer = analyzeLiquidations(candles, oiChangePct)
   const oiLayer = analyzeOpenInterest(oiCurrent, oiPrevious, priceChange)

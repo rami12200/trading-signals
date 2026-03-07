@@ -147,7 +147,7 @@ export async function GET(req: Request) {
     // Fetch all data in parallel
     const [candles, orderBook, fundingRate, oi, price, realFlow] = await Promise.all([
       getKlines(pair, interval, doBacktest ? 1000 : 200),
-      getOrderBook(pair, 20),
+      getOrderBook(pair, 100),
       getFundingRate(pair),
       getOpenInterest(pair),
       getPrice(pair),
