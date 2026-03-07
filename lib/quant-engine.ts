@@ -121,6 +121,38 @@ export interface QuantAnalysis {
   }
 }
 
+export interface RealOrderFlow {
+  buyVolume: number
+  sellVolume: number
+}
+
+export interface BacktestResult {
+  totalSignals: number
+  wins: number
+  losses: number
+  winRate: number
+  avgWinPct: number
+  avgLossPct: number
+  profitFactor: number
+  expectancy: number
+  maxConsecutiveLosses: number
+  signals: BacktestSignalResult[]
+}
+
+export interface BacktestSignalResult {
+  index: number
+  direction: SignalDirection
+  entry: number
+  stopLoss: number
+  takeProfit: number
+  probability: number
+  regime: MarketRegime
+  exitPrice: number
+  result: 'WIN' | 'LOSS'
+  pnlPct: number
+  barsToExit: number
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function ema(data: number[], period: number): number[] {
@@ -360,39 +392,57 @@ function analyzeLiquidity(clusters: LiquidityCluster[], candles: Candle[]): Laye
 
 // ─── Layer 4: Order Flow Analysis ────────────────────────────────────────────
 
-function analyzeOrderFlow(candles: Candle[]): LayerResult & { buyVol: number; sellVol: number; delta: number; dominance: 'BUY' | 'SELL' | 'NEUTRAL'; spike: boolean } {
-  const recent = candles.slice(-10)
-  let buyVol = 0, sellVol = 0
-  for (const c of recent) {
-    if (c.close >= c.open) {
-      buyVol += c.volume * 0.65
-      sellVol += c.volume * 0.35
-    } else {
-      sellVol += c.volume * 0.65
-      buyVol += c.volume * 0.35
+function analyzeOrderFlow(candles: Candle[], realFlow?: RealOrderFlow): LayerResult & { buyVol: number; sellVol: number; delta: number; dominance: 'BUY' | 'SELL' | 'NEUTRAL'; spike: boolean } {
+  let buyVol: number, sellVol: number
+
+  if (realFlow && realFlow.buyVolume > 0) {
+    buyVol = realFlow.buyVolume
+    sellVol = realFlow.sellVolume
+  } else {
+    const recent = candles.slice(-10)
+    buyVol = 0; sellVol = 0
+    for (const c of recent) {
+      if (c.close >= c.open) {
+        buyVol += c.volume * 0.65
+        sellVol += c.volume * 0.35
+      } else {
+        sellVol += c.volume * 0.65
+        buyVol += c.volume * 0.35
+      }
     }
   }
+
   const delta = buyVol - sellVol
   const totalVol = buyVol + sellVol
   const ratio = totalVol > 0 ? buyVol / totalVol : 0.5
-  const dominance: 'BUY' | 'SELL' | 'NEUTRAL' = ratio > 0.58 ? 'BUY' : ratio < 0.42 ? 'SELL' : 'NEUTRAL'
 
-  // Volume spike detection
-  const avgVol = candles.slice(-50, -10).reduce((s, c) => s + c.volume, 0) / 40
+  const buyDominance = ratio > 0.55
+  const sellDominance = ratio < 0.45
+  const strongBuy = ratio > 0.62
+  const strongSell = ratio < 0.38
+  const dominance: 'BUY' | 'SELL' | 'NEUTRAL' = buyDominance ? 'BUY' : sellDominance ? 'SELL' : 'NEUTRAL'
+
+  const recent = candles.slice(-10)
+  const avgVol = candles.slice(-50, -10).reduce((s, c) => s + c.volume, 0) / Math.max(1, candles.slice(-50, -10).length)
   const recentAvgVol = recent.reduce((s, c) => s + c.volume, 0) / recent.length
   const spike = recentAvgVol > avgVol * 1.5
 
   let score = 50
   let direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL'
-  if (dominance === 'BUY') { score = 65 + (spike ? 20 : 0); direction = 'BULLISH' }
-  if (dominance === 'SELL') { score = 65 + (spike ? 20 : 0); direction = 'BEARISH' }
+
+  if (strongBuy) { score = 78 + (spike ? 15 : 0); direction = 'BULLISH' }
+  else if (strongSell) { score = 78 + (spike ? 15 : 0); direction = 'BEARISH' }
+  else if (buyDominance) { score = 62 + (spike ? 15 : 0); direction = 'BULLISH' }
+  else if (sellDominance) { score = 62 + (spike ? 15 : 0); direction = 'BEARISH' }
+
+  const isReal = realFlow && realFlow.buyVolume > 0
 
   return {
     name: 'Order Flow',
     score: Math.min(95, score),
-    weight: 0.15,
+    weight: isReal ? 0.18 : 0.12,
     direction,
-    detail: `Delta: ${delta > 0 ? '+' : ''}${(delta / 1e6).toFixed(2)}M | ${dominance}${spike ? ' + VOLUME SPIKE' : ''}`,
+    detail: `Delta: ${delta > 0 ? '+' : ''}${(delta / 1e6).toFixed(2)}M | ${dominance}${spike ? ' + SPIKE' : ''}${isReal ? ' [REAL]' : ' [EST]'}`,
     buyVol, sellVol, delta, dominance, spike
   }
 }
@@ -606,39 +656,92 @@ function analyzeVolatility(candles: Candle[]): LayerResult & { atrVal: number; b
 // ─── AI Probability Engine ───────────────────────────────────────────────────
 
 function computeProbability(layers: LayerResult[], regime: MarketRegime): { probability: number; direction: SignalDirection | null; label: string } {
-  let bullishWeighted = 0, bearishWeighted = 0, totalWeight = 0
+  let bullishWeighted = 0, bearishWeighted = 0
+  let activeWeight = 0
 
   for (const layer of layers) {
     const w = layer.weight
-    totalWeight += w
-    if (layer.direction === 'BULLISH') bullishWeighted += layer.score * w
-    else if (layer.direction === 'BEARISH') bearishWeighted += layer.score * w
-    else {
-      bullishWeighted += layer.score * w * 0.3
-      bearishWeighted += layer.score * w * 0.3
+    if (layer.direction === 'BULLISH') {
+      bullishWeighted += layer.score * w
+      activeWeight += w
+    } else if (layer.direction === 'BEARISH') {
+      bearishWeighted += layer.score * w
+      activeWeight += w
     }
+    // NEUTRAL layers are excluded — they don't dilute the score
   }
 
-  const maxWeighted = Math.max(bullishWeighted, bearishWeighted)
-  const probability = totalWeight > 0 ? Math.round(maxWeighted / totalWeight) : 0
-  const direction: SignalDirection | null = bullishWeighted > bearishWeighted + 5 ? 'BUY' :
-    bearishWeighted > bullishWeighted + 5 ? 'SELL' : null
+  if (activeWeight === 0) {
+    return { probability: 0, direction: null, label: 'LOW' }
+  }
 
-  // Regime adjustment
-  let adjusted = probability
-  if (regime === 'TRENDING_UP' && direction === 'BUY') adjusted = Math.min(100, adjusted + 5)
-  if (regime === 'TRENDING_DOWN' && direction === 'SELL') adjusted = Math.min(100, adjusted + 5)
-  if (regime === 'HIGH_VOLATILITY') adjusted = Math.max(0, adjusted - 5)
+  const bullProb = Math.round(bullishWeighted / activeWeight)
+  const bearProb = Math.round(bearishWeighted / activeWeight)
 
-  const label = adjusted >= 90 ? 'EXTREME OPPORTUNITY' :
-    adjusted >= 85 ? 'INSTITUTIONAL SETUP' :
-    adjusted >= 75 ? 'HIGH PROBABILITY' :
-    adjusted >= 60 ? 'MODERATE' : 'LOW'
+  const bullishCount = layers.filter(l => l.direction === 'BULLISH').length
+  const bearishCount = layers.filter(l => l.direction === 'BEARISH').length
+  const neutralCount = layers.filter(l => l.direction === 'NEUTRAL').length
 
-  return { probability: adjusted, direction, label }
+  let direction: SignalDirection | null = null
+  let probability = 0
+
+  if (bullishCount > bearishCount && bullishCount >= 3) {
+    direction = 'BUY'
+    probability = bullProb
+  } else if (bearishCount > bullishCount && bearishCount >= 3) {
+    direction = 'SELL'
+    probability = bearProb
+  }
+
+  // Conflict penalty: if opposing layers exist, reduce confidence
+  const opposingCount = direction === 'BUY' ? bearishCount : bullishCount
+  if (opposingCount >= 2) probability = Math.max(0, probability - opposingCount * 5)
+
+  // Consensus bonus: many layers agree
+  const agreeCount = direction === 'BUY' ? bullishCount : bearishCount
+  if (agreeCount >= 6) probability = Math.min(100, probability + 8)
+  else if (agreeCount >= 5) probability = Math.min(100, probability + 5)
+
+  // Too many neutrals = low conviction
+  if (neutralCount >= 5) probability = Math.max(0, probability - 8)
+
+  // Regime alignment bonus
+  if (regime === 'TRENDING_UP' && direction === 'BUY') probability = Math.min(100, probability + 5)
+  if (regime === 'TRENDING_DOWN' && direction === 'SELL') probability = Math.min(100, probability + 5)
+  // Regime conflict penalty
+  if (regime === 'TRENDING_UP' && direction === 'SELL') probability = Math.max(0, probability - 10)
+  if (regime === 'TRENDING_DOWN' && direction === 'BUY') probability = Math.max(0, probability - 10)
+  if (regime === 'HIGH_VOLATILITY') probability = Math.max(0, probability - 5)
+
+  const label = probability >= 90 ? 'EXTREME OPPORTUNITY' :
+    probability >= 85 ? 'INSTITUTIONAL SETUP' :
+    probability >= 75 ? 'HIGH PROBABILITY' :
+    probability >= 60 ? 'MODERATE' : 'LOW'
+
+  return { probability, direction, label }
 }
 
 // ─── Signal Generation ───────────────────────────────────────────────────────
+
+function getDynamicSLTP(regime: MarketRegime, probability: number): { slMult: number; tpMult: number } {
+  if (regime === 'TRENDING_UP' || regime === 'TRENDING_DOWN') {
+    if (probability >= 85) return { slMult: 1.2, tpMult: 4.0 }
+    if (probability >= 75) return { slMult: 1.3, tpMult: 3.5 }
+    return { slMult: 1.5, tpMult: 3.0 }
+  }
+  if (regime === 'RANGE_BOUND') {
+    if (probability >= 85) return { slMult: 0.8, tpMult: 2.0 }
+    return { slMult: 1.0, tpMult: 1.8 }
+  }
+  if (regime === 'HIGH_VOLATILITY') {
+    return { slMult: 2.0, tpMult: 3.5 }
+  }
+  if (regime === 'LOW_VOLATILITY') {
+    if (probability >= 80) return { slMult: 1.0, tpMult: 2.5 }
+    return { slMult: 1.2, tpMult: 2.0 }
+  }
+  return { slMult: 1.5, tpMult: 3.0 }
+}
 
 function generateSignal(
   pair: string,
@@ -650,11 +753,10 @@ function generateSignal(
   regime: MarketRegime,
   layers: LayerResult[]
 ): QuantSignal {
-  const slMultiplier = 1.5
-  const tpMultiplier = 3.0
-  const sl = direction === 'BUY' ? price - slMultiplier * atrVal : price + slMultiplier * atrVal
-  const tp = direction === 'BUY' ? price + tpMultiplier * atrVal : price - tpMultiplier * atrVal
-  const rr = (tpMultiplier / slMultiplier).toFixed(1)
+  const { slMult, tpMult } = getDynamicSLTP(regime, probability)
+  const sl = direction === 'BUY' ? price - slMult * atrVal : price + slMult * atrVal
+  const tp = direction === 'BUY' ? price + tpMult * atrVal : price - tpMult * atrVal
+  const rr = (tpMult / slMult).toFixed(1)
 
   return {
     id: `${pair}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -681,7 +783,8 @@ export function runQuantAnalysis(
   orderBook: OrderBook,
   fundingRate: number,
   oiCurrent: number,
-  oiPrevious: number
+  oiPrevious: number,
+  realOrderFlow?: RealOrderFlow
 ): QuantAnalysis {
   if (candles.length < 50) {
     const emptyAnalysis: QuantAnalysis = {
@@ -720,7 +823,7 @@ export function runQuantAnalysis(
 
   const structureLayer = analyzeStructure(swingPoints)
   const liquidityLayer = analyzeLiquidity(liquidityClusters, candles)
-  const orderFlowLayer = analyzeOrderFlow(candles)
+  const orderFlowLayer = analyzeOrderFlow(candles, realOrderFlow)
   const orderBookLayer = analyzeOrderBook(orderBook)
   const oiChangePct = oiPrevious > 0 ? ((oiCurrent - oiPrevious) / oiPrevious) * 100 : 0
   const liquidationLayer = analyzeLiquidations(candles, oiChangePct)
@@ -744,10 +847,25 @@ export function runQuantAnalysis(
   // Compute probability
   const { probability, direction, label } = computeProbability(layers, regime)
 
-  // Generate signal if above threshold
+  // Generate signal with quality filter
   let signal: QuantSignal | null = null
-  if (probability >= 65 && direction) {
-    signal = generateSignal(pair, price, direction, probability, label, atrVal, regime, layers)
+  const agreeingLayers = layers.filter(l =>
+    (direction === 'BUY' && l.direction === 'BULLISH') ||
+    (direction === 'SELL' && l.direction === 'BEARISH')
+  ).length
+  const opposingLayers = layers.filter(l =>
+    (direction === 'BUY' && l.direction === 'BEARISH') ||
+    (direction === 'SELL' && l.direction === 'BULLISH')
+  ).length
+
+  const passesFilter = probability >= 65
+    && direction !== null
+    && agreeingLayers >= 3
+    && opposingLayers <= 2
+    && !(regime === 'HIGH_VOLATILITY' && probability < 75)
+
+  if (passesFilter) {
+    signal = generateSignal(pair, price, direction!, probability, label, atrVal, regime, layers)
   }
 
   return {
@@ -805,4 +923,111 @@ export function runQuantAnalysis(
       netDirection: liquidationLayer.net,
     },
   }
+}
+
+// ─── Backtesting Engine ─────────────────────────────────────────────────────
+
+export function backtestStrategy(
+  pair: string,
+  candles: Candle[],
+  orderBook: OrderBook
+): BacktestResult {
+  const windowSize = 200
+  const maxBarsToHold = 50
+  const stepSize = 3
+  const signals: BacktestSignalResult[] = []
+
+  if (candles.length < windowSize + maxBarsToHold) {
+    return { totalSignals: 0, wins: 0, losses: 0, winRate: 0, avgWinPct: 0, avgLossPct: 0, profitFactor: 0, expectancy: 0, maxConsecutiveLosses: 0, signals: [] }
+  }
+
+  for (let i = windowSize; i < candles.length - maxBarsToHold; i += stepSize) {
+    const window = candles.slice(i - windowSize, i)
+    const analysis = runQuantAnalysis(pair, window, orderBook, 0, 0, 0)
+
+    if (!analysis.signal) continue
+
+    const sig = analysis.signal
+    const future = candles.slice(i, i + maxBarsToHold)
+
+    let exitPrice = future[future.length - 1].close
+    let result: 'WIN' | 'LOSS' = 'LOSS'
+    let barsToExit = maxBarsToHold
+
+    for (let j = 0; j < future.length; j++) {
+      const bar = future[j]
+      if (sig.direction === 'BUY') {
+        if (bar.low <= sig.stopLoss) {
+          exitPrice = sig.stopLoss
+          result = 'LOSS'
+          barsToExit = j + 1
+          break
+        }
+        if (bar.high >= sig.takeProfit) {
+          exitPrice = sig.takeProfit
+          result = 'WIN'
+          barsToExit = j + 1
+          break
+        }
+      } else {
+        if (bar.high >= sig.stopLoss) {
+          exitPrice = sig.stopLoss
+          result = 'LOSS'
+          barsToExit = j + 1
+          break
+        }
+        if (bar.low <= sig.takeProfit) {
+          exitPrice = sig.takeProfit
+          result = 'WIN'
+          barsToExit = j + 1
+          break
+        }
+      }
+    }
+
+    const pnlPct = sig.direction === 'BUY'
+      ? ((exitPrice - sig.entry) / sig.entry) * 100
+      : ((sig.entry - exitPrice) / sig.entry) * 100
+
+    signals.push({
+      index: i,
+      direction: sig.direction,
+      entry: sig.entry,
+      stopLoss: sig.stopLoss,
+      takeProfit: sig.takeProfit,
+      probability: sig.probability,
+      regime: sig.regime,
+      exitPrice,
+      result,
+      pnlPct,
+      barsToExit,
+    })
+  }
+
+  const wins = signals.filter(s => s.result === 'WIN').length
+  const losses = signals.filter(s => s.result === 'LOSS').length
+  const totalSignals = signals.length
+  const winRate = totalSignals > 0 ? (wins / totalSignals) * 100 : 0
+
+  const winPnls = signals.filter(s => s.result === 'WIN').map(s => s.pnlPct)
+  const lossPnls = signals.filter(s => s.result === 'LOSS').map(s => Math.abs(s.pnlPct))
+
+  const avgWinPct = winPnls.length > 0 ? winPnls.reduce((a, b) => a + b, 0) / winPnls.length : 0
+  const avgLossPct = lossPnls.length > 0 ? lossPnls.reduce((a, b) => a + b, 0) / lossPnls.length : 0
+
+  const totalWinPct = winPnls.reduce((a, b) => a + b, 0)
+  const totalLossPct = lossPnls.reduce((a, b) => a + b, 0)
+  const profitFactor = totalLossPct > 0 ? totalWinPct / totalLossPct : totalWinPct > 0 ? 999 : 0
+
+  const expectancy = totalSignals > 0
+    ? (winRate / 100 * avgWinPct) - ((100 - winRate) / 100 * avgLossPct)
+    : 0
+
+  let maxConsecutiveLosses = 0, currentLosses = 0
+  for (const s of signals) {
+    if (s.result === 'LOSS') { currentLosses++; maxConsecutiveLosses = Math.max(maxConsecutiveLosses, currentLosses) }
+    else currentLosses = 0
+  }
+
+  return { totalSignals, wins, losses, winRate, avgWinPct, avgLossPct, profitFactor, expectancy, maxConsecutiveLosses, signals }
 }

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { runQuantAnalysis, Candle, OrderBook } from '@/lib/quant-engine'
+import { runQuantAnalysis, backtestStrategy, Candle, OrderBook, RealOrderFlow } from '@/lib/quant-engine'
 
 // ============================================
 // Institutional Quant AI Engine API
@@ -94,6 +94,25 @@ async function getPrice(symbol: string): Promise<number> {
   }, 3_000)
 }
 
+// Fetch real order flow from aggTrades
+async function getRealOrderFlow(symbol: string): Promise<RealOrderFlow> {
+  const key = `aggTrades-${symbol}`
+  return getCached(key, async () => {
+    try {
+      const raw = await fetchJSON(`${BINANCE_BASE}/api/v3/aggTrades?symbol=${symbol}&limit=1000`)
+      let buyVolume = 0, sellVolume = 0
+      for (const trade of raw) {
+        const value = parseFloat(trade.q) * parseFloat(trade.p)
+        if (trade.m) sellVolume += value   // isBuyerMaker = seller initiated
+        else buyVolume += value            // buyer initiated
+      }
+      return { buyVolume, sellVolume }
+    } catch {
+      return { buyVolume: 0, sellVolume: 0 }
+    }
+  }, 5_000)
+}
+
 // Rate limiter
 const rateLimiter: Record<string, number[]> = {}
 function isRateLimited(ip: string): boolean {
@@ -123,19 +142,22 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: `Invalid interval. Supported: ${VALID_INTERVALS.join(', ')}` }, { status: 400 })
     }
 
+    const doBacktest = searchParams.get('backtest') === 'true'
+
     // Fetch all data in parallel
-    const [candles, orderBook, fundingRate, oi, price] = await Promise.all([
-      getKlines(pair, interval, 200),
+    const [candles, orderBook, fundingRate, oi, price, realFlow] = await Promise.all([
+      getKlines(pair, interval, doBacktest ? 1000 : 200),
       getOrderBook(pair, 20),
       getFundingRate(pair),
       getOpenInterest(pair),
       getPrice(pair),
+      getRealOrderFlow(pair),
     ])
 
-    // Run quant analysis
-    const analysis = runQuantAnalysis(pair, candles, orderBook, fundingRate, oi.current, oi.previous)
+    // Run quant analysis with real order flow
+    const analysis = runQuantAnalysis(pair, candles.slice(-200), orderBook, fundingRate, oi.current, oi.previous, realFlow)
 
-    return NextResponse.json({
+    const response: any = {
       success: true,
       data: {
         ...analysis,
@@ -143,11 +165,18 @@ export async function GET(req: Request) {
         interval,
         timestamp: new Date().toISOString(),
       },
-    })
+    }
+
+    // Run backtest if requested
+    if (doBacktest && candles.length >= 300) {
+      response.backtest = backtestStrategy(pair, candles, orderBook)
+    }
+
+    return NextResponse.json(response)
   } catch (error: any) {
     console.error('Quant API error:', error)
     return NextResponse.json(
-      { error: error.message || 'Internal server error' },
+      { error: 'Internal server error' },
       { status: 500 }
     )
   }
