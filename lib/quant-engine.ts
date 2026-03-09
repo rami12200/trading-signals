@@ -911,34 +911,33 @@ function computeProbability(layers: LayerResult[], regime: MarketRegime, htf?: H
   if (neutralCount >= 5) probability = Math.max(0, probability - 8)
 
   // Regime alignment bonus
-  if (regime === 'TRENDING_UP' && direction === 'BUY') probability = Math.min(100, probability + 5)
-  if (regime === 'TRENDING_DOWN' && direction === 'SELL') probability = Math.min(100, probability + 5)
-  // Regime conflict penalty
-  if (regime === 'TRENDING_UP' && direction === 'SELL') probability = Math.max(0, probability - 10)
-  if (regime === 'TRENDING_DOWN' && direction === 'BUY') probability = Math.max(0, probability - 10)
-  if (regime === 'HIGH_VOLATILITY') probability = Math.max(0, probability - 5)
+  if (regime === 'TRENDING_UP' && direction === 'BUY') probability = Math.min(100, probability + 8)
+  if (regime === 'TRENDING_DOWN' && direction === 'SELL') probability = Math.min(100, probability + 8)
+  // Regime conflict penalty — HARD: trading against regime is almost always wrong
+  if (regime === 'TRENDING_UP' && direction === 'SELL') probability = Math.max(0, probability - 25)
+  if (regime === 'TRENDING_DOWN' && direction === 'BUY') probability = Math.max(0, probability - 25)
+  if (regime === 'HIGH_VOLATILITY') probability = Math.max(0, probability - 8)
 
-  // ─── Multi-Timeframe Alignment ───────────────────────────────────────────
+  // ─── Multi-Timeframe Alignment (HARD BLOCK) ──────────────────────────────
   if (htf && direction) {
-    const htfBullish = htf.trend === 'UP' || htf.structure === 'BULLISH'
-    const htfBearish = htf.trend === 'DOWN' || htf.structure === 'BEARISH'
+    const htfBullish = htf.trend === 'UP' || (htf.structure === 'BULLISH' && htf.priceVsEma === 'ABOVE')
+    const htfBearish = htf.trend === 'DOWN' || (htf.structure === 'BEARISH' && htf.priceVsEma === 'BELOW')
 
-    if (direction === 'BUY' && htfBullish && htf.priceVsEma === 'ABOVE') {
-      // HTF confirms LTF BUY — strong alignment
+    if (direction === 'BUY' && htfBullish) {
       probability = Math.min(100, probability + 10)
-    } else if (direction === 'SELL' && htfBearish && htf.priceVsEma === 'BELOW') {
-      // HTF confirms LTF SELL — strong alignment
+    } else if (direction === 'SELL' && htfBearish) {
       probability = Math.min(100, probability + 10)
-    } else if (direction === 'BUY' && htf.trend === 'DOWN') {
-      // Trading against HTF trend — high-risk counter-trend
-      probability = Math.max(0, probability - 18)
-    } else if (direction === 'SELL' && htf.trend === 'UP') {
-      // Trading against HTF trend — high-risk counter-trend
-      probability = Math.max(0, probability - 18)
+    } else if (direction === 'BUY' && htfBearish) {
+      // HARD BLOCK: BUY against bearish HTF = kill the signal
+      probability = 0
+      direction = null
+    } else if (direction === 'SELL' && htfBullish) {
+      // HARD BLOCK: SELL against bullish HTF = kill the signal
+      probability = 0
+      direction = null
     } else if (htf.trend === 'RANGE') {
-      // HTF ranging: slight penalty for trending entries, neutral otherwise
       if (regime === 'TRENDING_UP' || regime === 'TRENDING_DOWN') {
-        probability = Math.max(0, probability - 5)
+        probability = Math.max(0, probability - 8)
       }
     }
   }
@@ -991,22 +990,23 @@ export function buildHTFContext(htfCandles: Candle[], interval: string): HTFCont
 
 function getDynamicSLTP(regime: MarketRegime, probability: number): { slMult: number; tpMult: number } {
   if (regime === 'TRENDING_UP' || regime === 'TRENDING_DOWN') {
-    if (probability >= 85) return { slMult: 1.2, tpMult: 4.0 }
-    if (probability >= 75) return { slMult: 1.3, tpMult: 3.5 }
-    return { slMult: 1.5, tpMult: 3.0 }
+    // Wider SL in trends — pullbacks are normal, don't get stopped out
+    if (probability >= 85) return { slMult: 2.0, tpMult: 5.0 }
+    if (probability >= 75) return { slMult: 2.2, tpMult: 4.5 }
+    return { slMult: 2.5, tpMult: 4.0 }
   }
   if (regime === 'RANGE_BOUND') {
-    if (probability >= 85) return { slMult: 0.8, tpMult: 2.0 }
-    return { slMult: 1.0, tpMult: 1.8 }
+    if (probability >= 85) return { slMult: 1.2, tpMult: 2.5 }
+    return { slMult: 1.5, tpMult: 2.2 }
   }
   if (regime === 'HIGH_VOLATILITY') {
-    return { slMult: 2.0, tpMult: 3.5 }
+    return { slMult: 2.5, tpMult: 4.0 }
   }
   if (regime === 'LOW_VOLATILITY') {
-    if (probability >= 80) return { slMult: 1.0, tpMult: 2.5 }
-    return { slMult: 1.2, tpMult: 2.0 }
+    if (probability >= 80) return { slMult: 1.5, tpMult: 3.0 }
+    return { slMult: 1.8, tpMult: 2.5 }
   }
-  return { slMult: 1.5, tpMult: 3.0 }
+  return { slMult: 2.0, tpMult: 3.5 }
 }
 
 function generateSignal(
@@ -1039,6 +1039,23 @@ function generateSignal(
     atr: atrVal,
     riskReward: `1:${rr}`
   }
+}
+
+// ─── Signal Cooldown — prevent rapid-fire signals ────────────────────────────
+
+const signalCooldownMap: Record<string, { direction: SignalDirection; timestamp: number }> = {}
+const SIGNAL_COOLDOWN_MS = 3 * 60 * 60 * 1000 // 3 hours
+
+function isOnCooldown(pair: string, direction: SignalDirection): boolean {
+  const key = `${pair}-${direction}`
+  const entry = signalCooldownMap[key]
+  if (!entry) return false
+  return Date.now() - entry.timestamp < SIGNAL_COOLDOWN_MS
+}
+
+function markSignalSent(pair: string, direction: SignalDirection): void {
+  const key = `${pair}-${direction}`
+  signalCooldownMap[key] = { direction, timestamp: Date.now() }
 }
 
 // ─── Main Analysis Function ──────────────────────────────────────────────────
@@ -1130,9 +1147,11 @@ export function runQuantAnalysis(
     && agreeingLayers >= 3
     && opposingLayers <= 2
     && !(regime === 'HIGH_VOLATILITY' && probability < 75)
+    && !isOnCooldown(pair, direction!)
 
   if (passesFilter) {
     signal = generateSignal(pair, price, direction!, probability, label, atrVal, regime, layers)
+    markSignalSent(pair, direction!)
   }
 
   return {
