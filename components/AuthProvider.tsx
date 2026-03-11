@@ -65,19 +65,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (mounted) setLoading(false)
     })
 
-    // Listen for auth changes
+    // Listen for auth changes (non-async to avoid blocking signInWithPassword)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
+      (_event, session) => {
         if (!mounted) return
         if (session?.user) {
-          try {
-            const profile = await fetchProfile(session.user.id)
-            if (mounted) setUser(profile)
-          } catch {}
+          fetchProfile(session.user.id)
+            .then(profile => { if (mounted) setUser(profile) })
+            .catch(() => {})
+            .finally(() => { if (mounted) setLoading(false) })
         } else {
           setUser(null)
+          setLoading(false)
         }
-        setLoading(false)
       }
     )
 
