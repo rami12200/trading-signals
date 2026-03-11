@@ -910,38 +910,32 @@ function computeProbability(layers: LayerResult[], regime: MarketRegime, htf?: H
   // Too many neutrals = low conviction
   if (neutralCount >= 5) probability = Math.max(0, probability - 8)
 
-  // Regime alignment bonus
+  // ─── Regime + HTF Double Block ──────────────────────────────────────────
+  // Regime alignment
   if (regime === 'TRENDING_UP' && direction === 'BUY') probability = Math.min(100, probability + 8)
   if (regime === 'TRENDING_DOWN' && direction === 'SELL') probability = Math.min(100, probability + 8)
-  // Regime conflict penalty
-  if (regime === 'TRENDING_UP' && direction === 'SELL') probability = Math.max(0, probability - 20)
-  if (regime === 'TRENDING_DOWN' && direction === 'BUY') probability = Math.max(0, probability - 20)
   if (regime === 'HIGH_VOLATILITY') probability = Math.max(0, probability - 8)
 
-  // ─── Multi-Timeframe Alignment ──────────────────────────────────────────
+  // HARD BLOCK by regime: never trade against a clear regime trend
+  if (regime === 'TRENDING_UP' && direction === 'SELL') { probability = 0; direction = null }
+  if (regime === 'TRENDING_DOWN' && direction === 'BUY') { probability = 0; direction = null }
+
+  // HTF alignment (only if regime didn't already block)
   if (htf && direction) {
     const htfTrendUp = htf.trend === 'UP'
     const htfTrendDown = htf.trend === 'DOWN'
 
     if (direction === 'BUY' && htfTrendUp) {
-      // HTF confirms BUY — strong alignment
       probability = Math.min(100, probability + 10)
     } else if (direction === 'SELL' && htfTrendDown) {
-      // HTF confirms SELL — strong alignment
       probability = Math.min(100, probability + 10)
     } else if (direction === 'BUY' && htfTrendDown) {
-      // HARD BLOCK: BUY against clear downtrend = kill
-      probability = 0
-      direction = null
+      probability = 0; direction = null
     } else if (direction === 'SELL' && htfTrendUp) {
-      // HARD BLOCK: SELL against clear uptrend = kill
-      probability = 0
-      direction = null
+      probability = 0; direction = null
     } else if (htf.trend === 'RANGE') {
-      // HTF ranging — allow both directions with small penalty
       probability = Math.max(0, probability - 5)
     }
-    // HTF structure unclear (no clear trend) — no bonus, no penalty
   }
 
   const label = probability >= 90 ? 'EXTREME OPPORTUNITY' :
@@ -992,17 +986,16 @@ export function buildHTFContext(htfCandles: Candle[], interval: string): HTFCont
 
 function getDynamicSLTP(regime: MarketRegime, probability: number): { slMult: number; tpMult: number } {
   if (regime === 'TRENDING_UP' || regime === 'TRENDING_DOWN') {
-    // Wider SL in trends — pullbacks are normal, don't get stopped out
-    if (probability >= 85) return { slMult: 2.0, tpMult: 5.0 }
-    if (probability >= 75) return { slMult: 2.2, tpMult: 4.5 }
-    return { slMult: 2.5, tpMult: 4.0 }
+    if (probability >= 85) return { slMult: 2.5, tpMult: 5.5 }
+    if (probability >= 75) return { slMult: 2.8, tpMult: 5.0 }
+    return { slMult: 3.0, tpMult: 4.5 }
   }
   if (regime === 'RANGE_BOUND') {
-    if (probability >= 85) return { slMult: 1.2, tpMult: 2.5 }
-    return { slMult: 1.5, tpMult: 2.2 }
+    if (probability >= 85) return { slMult: 1.3, tpMult: 2.8 }
+    return { slMult: 1.5, tpMult: 2.7 }
   }
   if (regime === 'HIGH_VOLATILITY') {
-    return { slMult: 2.5, tpMult: 4.0 }
+    return { slMult: 2.8, tpMult: 4.5 }
   }
   if (regime === 'LOW_VOLATILITY') {
     if (probability >= 80) return { slMult: 1.5, tpMult: 3.0 }
@@ -1144,7 +1137,7 @@ export function runQuantAnalysis(
     (direction === 'SELL' && l.direction === 'BULLISH')
   ).length
 
-  const passesFilter = probability >= 65
+  const passesFilter = probability >= 70
     && direction !== null
     && agreeingLayers >= 3
     && opposingLayers <= 2
@@ -1153,7 +1146,14 @@ export function runQuantAnalysis(
 
   if (passesFilter) {
     signal = generateSignal(pair, price, direction!, probability, label, atrVal, regime, layers)
-    markSignalSent(pair, direction!)
+
+    // Enforce minimum R:R of 1.8 in RANGE_BOUND — reject coin-flip trades
+    if (regime === 'RANGE_BOUND' && signal) {
+      const rr = parseFloat(signal.riskReward.split(':')[1])
+      if (rr < 1.8) signal = null
+    }
+
+    if (signal) markSignalSent(pair, direction!)
   }
 
   return {
