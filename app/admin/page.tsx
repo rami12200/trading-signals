@@ -61,7 +61,7 @@ interface User {
 export default function AdminPage() {
   const { user, loading: authLoading } = useAuth()
   const router = useRouter()
-  const [tab, setTab] = useState<'plans' | 'users'>('plans')
+  const [tab, setTab] = useState<'plans' | 'users' | 'report'>('plans')
   const [plans, setPlans] = useState<Plan[]>([])
   const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
@@ -225,9 +225,17 @@ export default function AdminPage() {
         >
           👥 المستخدمين ({users.length})
         </button>
+        <button
+          onClick={() => setTab('report')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+            tab === 'report' ? 'bg-accent text-white' : 'bg-white/5 text-neutral-400 hover:text-white'
+          }`}
+        >
+          📊 تقرير الأداء
+        </button>
       </div>
 
-      {loading ? (
+      {loading && tab !== 'report' ? (
         <div className="text-center py-20 text-neutral-400">جاري التحميل...</div>
       ) : tab === 'plans' ? (
         <PlansTab
@@ -237,7 +245,7 @@ export default function AdminPage() {
           savePlan={savePlan}
           deletePlan={deletePlan}
         />
-      ) : (
+      ) : tab === 'users' ? (
         <UsersTab
           users={users}
           plans={plans}
@@ -247,6 +255,8 @@ export default function AdminPage() {
           toggleAdmin={toggleAdmin}
           regenerateApiKey={regenerateApiKey}
         />
+      ) : (
+        <ReportTab getToken={getToken} />
       )}
     </main>
   )
@@ -692,6 +702,249 @@ function UsersTab({
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  )
+}
+
+// ─── Report Tab ──────────────────────────────────────────────────────────────
+
+interface ReportSignal {
+  id: string
+  signal_id: string
+  pair: string
+  interval: string
+  direction: 'BUY' | 'SELL'
+  entry: number
+  stop_loss: number
+  take_profit: number
+  probability: number
+  strength_label: string
+  regime: string
+  risk_reward: string
+  result: 'WIN' | 'LOSS' | 'PENDING' | 'EXPIRED'
+  exit_price: number | null
+  exit_time: string | null
+  created_at: string
+  layers: any[]
+}
+
+interface ReportSummary {
+  total: number
+  wins: number
+  losses: number
+  pending: number
+  expired: number
+  winRate: number
+  profitFactor: number
+  avgRR: number
+  maxConsecLosses: number
+  avgProbability: number
+  days: number
+  pair: string
+}
+
+function ReportTab({ getToken }: { getToken: () => Promise<string> }) {
+  const [summary, setSummary] = useState<ReportSummary | null>(null)
+  const [signals, setSignals] = useState<ReportSignal[]>([])
+  const [reportLoading, setReportLoading] = useState(false)
+  const [filterPair, setFilterPair] = useState<string>('ALL')
+  const [filterDays, setFilterDays] = useState<number>(7)
+  const [copied, setCopied] = useState(false)
+
+  const fetchReport = useCallback(async () => {
+    setReportLoading(true)
+    try {
+      const token = await getToken()
+      const pairParam = filterPair !== 'ALL' ? `&pair=${filterPair}` : ''
+      const res = await fetch(`/api/admin/report?days=${filterDays}${pairParam}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const json = await res.json()
+      if (json.success) {
+        setSummary(json.summary)
+        setSignals(json.signals)
+      }
+    } catch (err) {
+      console.error('Report fetch error:', err)
+    }
+    setReportLoading(false)
+  }, [getToken, filterPair, filterDays])
+
+  useEffect(() => {
+    fetchReport()
+  }, [fetchReport])
+
+  const copyReport = () => {
+    if (!summary) return
+    const lines: string[] = []
+    lines.push('=== Quant Engine Performance Report ===')
+    lines.push(`Period: ${summary.days} days | Pair: ${summary.pair}`)
+    lines.push(`Total Signals: ${summary.total}`)
+    lines.push(`Wins: ${summary.wins} | Losses: ${summary.losses} | Pending: ${summary.pending} | Expired: ${summary.expired}`)
+    lines.push(`Win Rate: ${summary.winRate}%`)
+    lines.push(`Profit Factor: ${summary.profitFactor}`)
+    lines.push(`Avg R:R: ${summary.avgRR}`)
+    lines.push(`Max Consecutive Losses: ${summary.maxConsecLosses}`)
+    lines.push(`Avg Probability: ${summary.avgProbability}%`)
+    lines.push('')
+    lines.push('=== Signal Details ===')
+    lines.push('Pair | Dir | Entry | SL | TP | Prob | Regime | R:R | Result | Exit | Time')
+    lines.push('-'.repeat(100))
+    for (const s of signals) {
+      const exit = s.exit_price != null ? s.exit_price.toFixed(2) : '-'
+      const time = s.created_at ? new Date(s.created_at).toLocaleString('en-GB', { hour12: false }) : '-'
+      lines.push(
+        `${s.pair} | ${s.direction} | ${s.entry} | ${s.stop_loss} | ${s.take_profit} | ${s.probability}% | ${s.regime} | ${s.risk_reward} | ${s.result} | ${exit} | ${time}`
+      )
+    }
+    navigator.clipboard.writeText(lines.join('\n'))
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  if (reportLoading) {
+    return <div className="text-center py-20 text-neutral-400">جاري تحميل التقرير...</div>
+  }
+
+  return (
+    <div>
+      {/* Filters */}
+      <div className="flex items-center gap-3 mb-6 flex-wrap">
+        <select
+          value={filterPair}
+          onChange={e => setFilterPair(e.target.value)}
+          className="px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-sm outline-none"
+        >
+          <option value="ALL">كل العملات</option>
+          <option value="BTCUSDT">BTC/USDT</option>
+          <option value="ETHUSDT">ETH/USDT</option>
+        </select>
+        <select
+          value={filterDays}
+          onChange={e => setFilterDays(parseInt(e.target.value))}
+          className="px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-sm outline-none"
+        >
+          <option value={1}>يوم واحد</option>
+          <option value={3}>3 أيام</option>
+          <option value={7}>أسبوع</option>
+          <option value={14}>أسبوعين</option>
+          <option value={30}>شهر</option>
+        </select>
+        <button
+          onClick={fetchReport}
+          className="px-4 py-2 rounded-lg bg-accent/20 text-accent text-sm font-medium hover:bg-accent/30 transition-all"
+        >
+          تحديث
+        </button>
+        <button
+          onClick={copyReport}
+          className="px-4 py-2 rounded-lg bg-emerald-500/20 text-emerald-400 text-sm font-medium hover:bg-emerald-500/30 transition-all"
+        >
+          {copied ? '✅ تم النسخ' : '📋 نسخ التقرير'}
+        </button>
+      </div>
+
+      {/* Summary Cards */}
+      {summary && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+            <p className="text-xs text-neutral-500">إجمالي الإشارات</p>
+            <p className="text-2xl font-bold text-white mt-1">{summary.total}</p>
+          </div>
+          <div className="p-4 rounded-xl bg-emerald-500/[0.06] border border-emerald-500/20">
+            <p className="text-xs text-emerald-400/70">Win Rate</p>
+            <p className="text-2xl font-bold text-emerald-400 mt-1">{summary.winRate}%</p>
+            <p className="text-xs text-neutral-500 mt-1">{summary.wins}W / {summary.losses}L</p>
+          </div>
+          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+            <p className="text-xs text-neutral-500">Profit Factor</p>
+            <p className={`text-2xl font-bold mt-1 ${summary.profitFactor >= 1.0 ? 'text-emerald-400' : 'text-red-400'}`}>{summary.profitFactor}</p>
+          </div>
+          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+            <p className="text-xs text-neutral-500">Avg R:R</p>
+            <p className="text-2xl font-bold text-white mt-1">{summary.avgRR}</p>
+          </div>
+          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+            <p className="text-xs text-neutral-500">Pending</p>
+            <p className="text-2xl font-bold text-yellow-400 mt-1">{summary.pending}</p>
+          </div>
+          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+            <p className="text-xs text-neutral-500">Expired</p>
+            <p className="text-2xl font-bold text-neutral-400 mt-1">{summary.expired}</p>
+          </div>
+          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+            <p className="text-xs text-neutral-500">Max خسائر متتالية</p>
+            <p className="text-2xl font-bold text-red-400 mt-1">{summary.maxConsecLosses}</p>
+          </div>
+          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06]">
+            <p className="text-xs text-neutral-500">متوسط الاحتمالية</p>
+            <p className="text-2xl font-bold text-white mt-1">{summary.avgProbability}%</p>
+          </div>
+        </div>
+      )}
+
+      {/* Signals Table */}
+      <div className="overflow-x-auto rounded-xl border border-white/[0.06]">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-white/[0.03]">
+              <th className="px-3 py-3 text-right text-xs text-neutral-400 font-medium">الوقت</th>
+              <th className="px-3 py-3 text-right text-xs text-neutral-400 font-medium">الزوج</th>
+              <th className="px-3 py-3 text-right text-xs text-neutral-400 font-medium">النوع</th>
+              <th className="px-3 py-3 text-right text-xs text-neutral-400 font-medium">الدخول</th>
+              <th className="px-3 py-3 text-right text-xs text-neutral-400 font-medium">SL</th>
+              <th className="px-3 py-3 text-right text-xs text-neutral-400 font-medium">TP</th>
+              <th className="px-3 py-3 text-right text-xs text-neutral-400 font-medium">%</th>
+              <th className="px-3 py-3 text-right text-xs text-neutral-400 font-medium">Regime</th>
+              <th className="px-3 py-3 text-right text-xs text-neutral-400 font-medium">R:R</th>
+              <th className="px-3 py-3 text-right text-xs text-neutral-400 font-medium">الخروج</th>
+              <th className="px-3 py-3 text-right text-xs text-neutral-400 font-medium">النتيجة</th>
+            </tr>
+          </thead>
+          <tbody>
+            {signals.map((s) => (
+              <tr key={s.id} className={`border-t border-white/[0.04] ${
+                s.result === 'WIN' ? 'bg-emerald-500/[0.03]' :
+                s.result === 'LOSS' ? 'bg-red-500/[0.03]' : ''
+              }`}>
+                <td className="px-3 py-2 text-xs text-neutral-400 font-mono">
+                  {new Date(s.created_at).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}
+                </td>
+                <td className="px-3 py-2 text-xs text-white font-medium">{s.pair.replace('USDT', '')}</td>
+                <td className="px-3 py-2">
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                    s.direction === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'
+                  }`}>
+                    {s.direction === 'BUY' ? 'شراء' : 'بيع'}
+                  </span>
+                </td>
+                <td className="px-3 py-2 text-xs text-white font-mono">{Number(s.entry).toFixed(2)}</td>
+                <td className="px-3 py-2 text-xs text-red-400 font-mono">{Number(s.stop_loss).toFixed(2)}</td>
+                <td className="px-3 py-2 text-xs text-emerald-400 font-mono">{Number(s.take_profit).toFixed(2)}</td>
+                <td className="px-3 py-2 text-xs text-white font-bold">{s.probability}%</td>
+                <td className="px-3 py-2 text-xs text-neutral-400">{s.regime}</td>
+                <td className="px-3 py-2 text-xs text-white font-mono">{s.risk_reward}</td>
+                <td className="px-3 py-2 text-xs text-neutral-300 font-mono">
+                  {s.exit_price != null ? Number(s.exit_price).toFixed(2) : '-'}
+                </td>
+                <td className="px-3 py-2">
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                    s.result === 'WIN' ? 'bg-emerald-500/20 text-emerald-400' :
+                    s.result === 'LOSS' ? 'bg-red-500/20 text-red-400' :
+                    s.result === 'PENDING' ? 'bg-yellow-500/20 text-yellow-400' :
+                    'bg-neutral-500/20 text-neutral-400'
+                  }`}>
+                    {s.result === 'WIN' ? 'ربح' : s.result === 'LOSS' ? 'خسارة' : s.result === 'PENDING' ? 'مفتوحة' : 'منتهية'}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {signals.length === 0 && (
+          <div className="text-center py-10 text-neutral-500 text-sm">لا توجد إشارات في هذه الفترة</div>
+        )}
       </div>
     </div>
   )

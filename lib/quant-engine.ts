@@ -913,33 +913,35 @@ function computeProbability(layers: LayerResult[], regime: MarketRegime, htf?: H
   // Regime alignment bonus
   if (regime === 'TRENDING_UP' && direction === 'BUY') probability = Math.min(100, probability + 8)
   if (regime === 'TRENDING_DOWN' && direction === 'SELL') probability = Math.min(100, probability + 8)
-  // Regime conflict penalty — HARD: trading against regime is almost always wrong
-  if (regime === 'TRENDING_UP' && direction === 'SELL') probability = Math.max(0, probability - 25)
-  if (regime === 'TRENDING_DOWN' && direction === 'BUY') probability = Math.max(0, probability - 25)
+  // Regime conflict penalty
+  if (regime === 'TRENDING_UP' && direction === 'SELL') probability = Math.max(0, probability - 20)
+  if (regime === 'TRENDING_DOWN' && direction === 'BUY') probability = Math.max(0, probability - 20)
   if (regime === 'HIGH_VOLATILITY') probability = Math.max(0, probability - 8)
 
-  // ─── Multi-Timeframe Alignment (HARD BLOCK) ──────────────────────────────
+  // ─── Multi-Timeframe Alignment ──────────────────────────────────────────
   if (htf && direction) {
-    const htfBullish = htf.trend === 'UP' || (htf.structure === 'BULLISH' && htf.priceVsEma === 'ABOVE')
-    const htfBearish = htf.trend === 'DOWN' || (htf.structure === 'BEARISH' && htf.priceVsEma === 'BELOW')
+    const htfTrendUp = htf.trend === 'UP'
+    const htfTrendDown = htf.trend === 'DOWN'
 
-    if (direction === 'BUY' && htfBullish) {
+    if (direction === 'BUY' && htfTrendUp) {
+      // HTF confirms BUY — strong alignment
       probability = Math.min(100, probability + 10)
-    } else if (direction === 'SELL' && htfBearish) {
+    } else if (direction === 'SELL' && htfTrendDown) {
+      // HTF confirms SELL — strong alignment
       probability = Math.min(100, probability + 10)
-    } else if (direction === 'BUY' && htfBearish) {
-      // HARD BLOCK: BUY against bearish HTF = kill the signal
+    } else if (direction === 'BUY' && htfTrendDown) {
+      // HARD BLOCK: BUY against clear downtrend = kill
       probability = 0
       direction = null
-    } else if (direction === 'SELL' && htfBullish) {
-      // HARD BLOCK: SELL against bullish HTF = kill the signal
+    } else if (direction === 'SELL' && htfTrendUp) {
+      // HARD BLOCK: SELL against clear uptrend = kill
       probability = 0
       direction = null
     } else if (htf.trend === 'RANGE') {
-      if (regime === 'TRENDING_UP' || regime === 'TRENDING_DOWN') {
-        probability = Math.max(0, probability - 8)
-      }
+      // HTF ranging — allow both directions with small penalty
+      probability = Math.max(0, probability - 5)
     }
+    // HTF structure unclear (no clear trend) — no bonus, no penalty
   }
 
   const label = probability >= 90 ? 'EXTREME OPPORTUNITY' :
@@ -1044,7 +1046,7 @@ function generateSignal(
 // ─── Signal Cooldown — prevent rapid-fire signals ────────────────────────────
 
 const signalCooldownMap: Record<string, { direction: SignalDirection; timestamp: number }> = {}
-const SIGNAL_COOLDOWN_MS = 3 * 60 * 60 * 1000 // 3 hours
+const SIGNAL_COOLDOWN_MS = 1.5 * 60 * 60 * 1000 // 1.5 hours
 
 function isOnCooldown(pair: string, direction: SignalDirection): boolean {
   const key = `${pair}-${direction}`
