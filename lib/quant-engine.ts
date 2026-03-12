@@ -1137,20 +1137,39 @@ export function runQuantAnalysis(
     (direction === 'SELL' && l.direction === 'BULLISH')
   ).length
 
+  // RSI overbought/oversold filter
+  const rsiVal = momentumLayer.rsiVal
+  const rsiBlocked = (direction === 'BUY' && rsiVal > 70) || (direction === 'SELL' && rsiVal < 30)
+
+  // Price extension filter: don't buy at the top of a trend / sell at the bottom
+  const ema21Val = momentumLayer.ema21
+  const priceExtension = ema21Val > 0 ? (price - ema21Val) / atrVal : 0
+  const extensionBlocked = (direction === 'BUY' && priceExtension > 1.5)
+    || (direction === 'SELL' && priceExtension < -1.5)
+
   const passesFilter = probability >= 70
     && direction !== null
     && agreeingLayers >= 3
     && opposingLayers <= 2
     && !(regime === 'HIGH_VOLATILITY' && probability < 75)
+    && !rsiBlocked
+    && !extensionBlocked
     && !isOnCooldown(pair, direction!)
 
   if (passesFilter) {
     signal = generateSignal(pair, price, direction!, probability, label, atrVal, regime, layers)
 
-    // Enforce minimum R:R of 1.8 in RANGE_BOUND — reject coin-flip trades
+    // Enforce minimum R:R of 1.8 in RANGE_BOUND
     if (regime === 'RANGE_BOUND' && signal) {
       const rr = parseFloat(signal.riskReward.split(':')[1])
       if (rr < 1.8) signal = null
+    }
+
+    // Enforce minimum SL distance of 0.3% of entry price
+    if (signal) {
+      const slDist = Math.abs(signal.entry - signal.stopLoss)
+      const minSlDist = signal.entry * 0.003
+      if (slDist < minSlDist) signal = null
     }
 
     if (signal) markSignalSent(pair, direction!)
