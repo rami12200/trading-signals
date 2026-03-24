@@ -246,7 +246,7 @@ export default function CorrelationPage() {
   // ─── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <ProtectedPage requiredPlan="vip" pageName="correlation" featureName="Smart Correlation Scalping">
+    <ProtectedPage requiredPlan="vip" featureName="Smart Correlation Scalping">
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-5">
 
         {/* Signal Flash Alert */}
