@@ -1,0 +1,647 @@
+'use client'
+
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { ProtectedPage } from '@/components/ProtectedPage'
+import { useAuth } from '@/components/AuthProvider'
+import { useBinanceWS } from '@/hooks/useBinanceWS'
+
+// ─── Types ─────────────────────────────────────────────────────────────────────
+
+interface BTCState {
+  currentPrice: number
+  changes: { '30s': number; '1m': number; '3m': number; '5m': number }
+  momentum: number
+  acceleration: number
+  direction: string
+  isEvent: boolean
+  eventStrength: number
+}
+
+interface LagOpportunity {
+  symbol: string
+  label: string
+  lagScore: number
+  btcChange: number
+  targetChange: number
+  expectedTargetChange: number
+  correlation: number
+  direction: 'BUY' | 'SELL'
+  confidence: number
+  microPullbackDetected: boolean
+  reason: string
+}
+
+interface TargetAnalysis {
+  symbol: string
+  label: string
+  currentPrice: number
+  change1m: number
+  change5m: number
+  correlation: number
+  lagScore: number
+  lagDetected: boolean
+  opportunity: LagOpportunity | null
+  atr: number
+  rsi: number | null
+}
+
+interface CorrelationSignal {
+  id: string
+  symbol: string
+  label: string
+  action: 'BUY' | 'SELL'
+  entry: number
+  stopLoss: number
+  takeProfit: number
+  confidence: number
+  lagScore: number
+  btcChange: number
+  btcDirection: string
+  correlation: number
+  reason: string
+  timestamp: number
+  riskReward: number
+}
+
+interface ActiveTrade {
+  id: string
+  signal: CorrelationSignal
+  openPrice: number
+  currentPrice: number
+  pnl: number
+  pnlPercent: number
+  status: string
+  openedAt: number
+}
+
+interface CorrelationAnalysis {
+  btc: BTCState
+  targets: TargetAnalysis[]
+  signals: CorrelationSignal[]
+  activeTrades: ActiveTrade[]
+  timestamp: number
+}
+
+// ─── Constants ─────────────────────────────────────────────────────────────────
+
+const ALL_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT']
+
+const LOT_PRESETS = [0.01, 0.05, 0.1, 0.5, 1.0]
+
+// ─── Component ─────────────────────────────────────────────────────────────────
+
+export default function CorrelationPage() {
+  const { user } = useAuth()
+  const { prices, connected } = useBinanceWS(ALL_SYMBOLS)
+
+  const [analysis, setAnalysis] = useState<CorrelationAnalysis | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [autoTrade, setAutoTrade] = useState(false)
+  const [soundEnabled, setSoundEnabled] = useState(true)
+  const [signalFlash, setSignalFlash] = useState(false)
+  const [selectedLot, setSelectedLot] = useState(0.01)
+  const [customLot, setCustomLot] = useState('')
+  const [isCustomLot, setIsCustomLot] = useState(false)
+  const [tradeLog, setTradeLog] = useState<string[]>([])
+  const [executing, setExecuting] = useState<string | null>(null)
+  const [lastSignalId, setLastSignalId] = useState<string | null>(null)
+
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // ─── Sound Alert ─────────────────────────────────────────────────────────────
+
+  const playAlert = useCallback(() => {
+    if (!soundEnabled) return
+    try {
+      if (!audioCtxRef.current) audioCtxRef.current = new AudioContext()
+      const ctx = audioCtxRef.current
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.type = 'sine'
+      gain.gain.value = 0.3
+
+      // Two-tone alert
+      osc.frequency.setValueAtTime(880, ctx.currentTime)
+      osc.frequency.setValueAtTime(1100, ctx.currentTime + 0.15)
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.3)
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5)
+      osc.start(ctx.currentTime)
+      osc.stop(ctx.currentTime + 0.5)
+    } catch {}
+  }, [soundEnabled])
+
+  const triggerFlash = useCallback(() => {
+    setSignalFlash(true)
+    setTimeout(() => setSignalFlash(false), 3000)
+  }, [])
+
+  // ─── Fetch Analysis ──────────────────────────────────────────────────────────
+
+  const fetchAnalysis = useCallback(async () => {
+    try {
+      const res = await fetch('/api/correlation?interval=1m')
+      const json = await res.json()
+      if (json.success && json.data) {
+        setAnalysis(json.data)
+        setError(null)
+
+        // Check for new signals
+        if (json.data.signals && json.data.signals.length > 0) {
+          const newest = json.data.signals[0]
+          if (newest.id !== lastSignalId) {
+            setLastSignalId(newest.id)
+            playAlert()
+            triggerFlash()
+            addLog(`New signal: ${newest.action} ${newest.label} @ ${newest.entry} (Lag: ${newest.lagScore.toFixed(2)}%)`)
+
+            // Auto trade
+            if (autoTrade && user) {
+              executeTrade(newest)
+            }
+          }
+        }
+      }
+    } catch (e) {
+      setError('Failed to fetch analysis')
+    } finally {
+      setLoading(false)
+    }
+  }, [lastSignalId, autoTrade, user, playAlert, triggerFlash])
+
+  // ─── Execute Trade ───────────────────────────────────────────────────────────
+
+  const executeTrade = useCallback(async (signal: CorrelationSignal) => {
+    if (!user?.api_key) {
+      addLog('Error: No API key found')
+      return
+    }
+
+    setExecuting(signal.id)
+    const lot = isCustomLot ? parseFloat(customLot) || 0.01 : selectedLot
+
+    try {
+      const res = await fetch('/api/signals/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: signal.symbol,
+          action: signal.action,
+          entry: signal.entry,
+          stopLoss: signal.stopLoss,
+          takeProfit: signal.takeProfit,
+          lotSize: lot,
+          api_key: user.api_key,
+        }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        addLog(`Executed: ${signal.action} ${signal.label} | Lot: ${lot} | SL: ${signal.stopLoss} | TP: ${signal.takeProfit}`)
+      } else {
+        addLog(`Execution failed: ${data.error}`)
+      }
+    } catch {
+      addLog('Execution error: Network failure')
+    } finally {
+      setExecuting(null)
+    }
+  }, [user, selectedLot, customLot, isCustomLot])
+
+  const addLog = (msg: string) => {
+    const time = new Date().toLocaleTimeString('en-US', { hour12: false })
+    setTradeLog(prev => [`[${time}] ${msg}`, ...prev.slice(0, 99)])
+  }
+
+  // ─── Polling ─────────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    fetchAnalysis()
+    pollRef.current = setInterval(fetchAnalysis, 3000)
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current)
+    }
+  }, [fetchAnalysis])
+
+  // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+  const fmt = (n: number, d = 2) => n?.toFixed(d) ?? '—'
+  const fmtPrice = (p: number) => {
+    if (p >= 1000) return p.toLocaleString('en-US', { maximumFractionDigits: 2 })
+    if (p >= 1) return p.toFixed(4)
+    return p.toFixed(6)
+  }
+
+  const dirColor = (dir: string) => {
+    if (dir.includes('BULLISH') || dir === 'BUY') return 'text-emerald-400'
+    if (dir.includes('BEARISH') || dir === 'SELL') return 'text-red-400'
+    return 'text-neutral-400'
+  }
+
+  const btc = analysis?.btc
+  const btcLivePrice = prices['BTCUSDT']?.price
+
+  // ─── Render ──────────────────────────────────────────────────────────────────
+
+  return (
+    <ProtectedPage requiredPlan="vip" pageName="correlation" featureName="Smart Correlation Scalping">
+      <div className="max-w-7xl mx-auto px-4 py-6 space-y-5">
+
+        {/* Signal Flash Alert */}
+        {signalFlash && (
+          <div className="fixed top-0 left-0 right-0 z-50 bg-yellow-500/90 text-black text-center py-3 font-bold text-lg animate-pulse">
+            LAG DETECTED — New Trading Opportunity!
+          </div>
+        )}
+
+        {/* Header */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold">Smart Correlation Scalping</h1>
+            <p className="text-neutral-400 text-sm mt-1">BTC leads → Altcoins lag → Exploit the gap</p>
+          </div>
+          <div className="flex items-center gap-3">
+            {/* Sound Toggle */}
+            <button
+              onClick={() => setSoundEnabled(!soundEnabled)}
+              className={`px-3 py-2 rounded-lg text-sm transition-colors ${
+                soundEnabled ? 'bg-emerald-600/30 text-emerald-400' : 'bg-neutral-800 text-neutral-500'
+              }`}
+            >
+              {soundEnabled ? '🔔' : '🔕'}
+            </button>
+
+            {/* Auto Trade Toggle */}
+            <button
+              onClick={() => {
+                setAutoTrade(!autoTrade)
+                addLog(autoTrade ? 'Auto Trading OFF' : 'Auto Trading ON')
+              }}
+              className={`px-4 py-2 rounded-lg text-sm font-bold transition-all ${
+                autoTrade
+                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
+                  : 'bg-neutral-800 text-neutral-400 hover:bg-neutral-700'
+              }`}
+            >
+              Auto: {autoTrade ? 'ON' : 'OFF'}
+            </button>
+
+            {/* Connection Status */}
+            <div className={`w-3 h-3 rounded-full ${connected ? 'bg-emerald-500' : 'bg-red-500'} animate-pulse`}
+                 title={connected ? 'WebSocket Connected' : 'Disconnected'} />
+          </div>
+        </div>
+
+        {/* BTC Leader Panel */}
+        <div className="card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-bold flex items-center gap-2">
+              <span className="text-yellow-500">₿</span> BTC Leader Status
+            </h2>
+            {btc?.isEvent && (
+              <span className="px-3 py-1 bg-yellow-500/20 text-yellow-400 rounded-full text-xs font-bold animate-pulse">
+                BTC EVENT — Strength: {btc.eventStrength.toFixed(0)}%
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+            <div>
+              <p className="text-neutral-500 text-xs mb-1">Price</p>
+              <p className="text-xl font-bold font-mono">
+                ${fmtPrice(btcLivePrice || btc?.currentPrice || 0)}
+              </p>
+            </div>
+            <div>
+              <p className="text-neutral-500 text-xs mb-1">30s Change</p>
+              <p className={`text-lg font-bold font-mono ${(btc?.changes['30s'] || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {fmt(btc?.changes['30s'] || 0, 3)}%
+              </p>
+            </div>
+            <div>
+              <p className="text-neutral-500 text-xs mb-1">1m Change</p>
+              <p className={`text-lg font-bold font-mono ${(btc?.changes['1m'] || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {fmt(btc?.changes['1m'] || 0, 3)}%
+              </p>
+            </div>
+            <div>
+              <p className="text-neutral-500 text-xs mb-1">5m Change</p>
+              <p className={`text-lg font-bold font-mono ${(btc?.changes['5m'] || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {fmt(btc?.changes['5m'] || 0, 3)}%
+              </p>
+            </div>
+            <div>
+              <p className="text-neutral-500 text-xs mb-1">Momentum</p>
+              <p className={`text-lg font-bold font-mono ${(btc?.momentum || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {fmt(btc?.momentum || 0, 3)}
+              </p>
+            </div>
+            <div>
+              <p className="text-neutral-500 text-xs mb-1">Direction</p>
+              <p className={`text-lg font-bold ${dirColor(btc?.direction || 'NEUTRAL')}`}>
+                {btc?.direction?.replace('_', ' ') || 'NEUTRAL'}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Target Markets Grid */}
+        <div>
+          <h2 className="text-lg font-bold mb-3">Target Markets</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+            {analysis?.targets.map(target => {
+              const livePrice = prices[target.symbol]?.price || target.currentPrice
+              return (
+                <div key={target.symbol}
+                     className={`card p-4 transition-all ${
+                       target.lagDetected
+                         ? 'ring-2 ring-yellow-500/50 bg-yellow-500/5'
+                         : ''
+                     }`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-base">{target.label}</span>
+                      <span className="text-neutral-500 text-xs">{target.symbol}</span>
+                    </div>
+                    {target.lagDetected && (
+                      <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-400 rounded text-xs font-bold animate-pulse">
+                        LAG
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 text-sm mb-2">
+                    <div>
+                      <p className="text-neutral-500 text-xs">Price</p>
+                      <p className="font-mono font-bold">${fmtPrice(livePrice)}</p>
+                    </div>
+                    <div>
+                      <p className="text-neutral-500 text-xs">1m Chg</p>
+                      <p className={`font-mono font-bold ${target.change1m >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {fmt(target.change1m, 3)}%
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-neutral-500 text-xs">Corr</p>
+                      <p className={`font-mono font-bold ${
+                        target.correlation > 0.7 ? 'text-emerald-400' :
+                        target.correlation > 0.45 ? 'text-yellow-400' : 'text-red-400'
+                      }`}>
+                        {fmt(target.correlation, 2)}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Lag Bar */}
+                  <div className="mt-2">
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-neutral-500">Lag Score</span>
+                      <span className={target.lagScore > 0.15 ? 'text-yellow-400' : 'text-neutral-500'}>
+                        {fmt(target.lagScore, 3)}%
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          target.lagScore > 0.3 ? 'bg-yellow-500' :
+                          target.lagScore > 0.15 ? 'bg-yellow-600' : 'bg-neutral-600'
+                        }`}
+                        style={{ width: `${Math.min(100, target.lagScore * 200)}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Opportunity detail */}
+                  {target.opportunity && (
+                    <div className="mt-3 p-2 rounded bg-yellow-500/10 border border-yellow-500/20 text-xs">
+                      <div className="flex justify-between mb-1">
+                        <span className={`font-bold ${target.opportunity.direction === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {target.opportunity.direction}
+                        </span>
+                        <span className="text-yellow-400">
+                          Confidence: {target.opportunity.confidence}%
+                        </span>
+                      </div>
+                      <p className="text-neutral-400 leading-relaxed">
+                        BTC {target.opportunity.btcChange > 0 ? '+' : ''}{fmt(target.opportunity.btcChange, 2)}%
+                        → {target.label} expected {fmt(target.opportunity.expectedTargetChange, 2)}%
+                        but only {fmt(target.opportunity.targetChange, 2)}%
+                      </p>
+                      {target.opportunity.microPullbackDetected && (
+                        <p className="text-emerald-400 mt-1">Micro pullback confirmed</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Signals + Execution */}
+        {analysis?.signals && analysis.signals.length > 0 && (
+          <div className="card p-5 ring-2 ring-yellow-500/30">
+            <h2 className="text-lg font-bold mb-3 flex items-center gap-2">
+              <span className="w-2 h-2 bg-yellow-500 rounded-full animate-pulse" />
+              Active Signals
+            </h2>
+            {analysis.signals.map(sig => (
+              <div key={sig.id} className="p-4 bg-neutral-800/50 rounded-lg mb-3">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                  <div className="flex items-center gap-3">
+                    <span className={`px-3 py-1 rounded font-bold text-sm ${
+                      sig.action === 'BUY' ? 'bg-emerald-600/30 text-emerald-400' : 'bg-red-600/30 text-red-400'
+                    }`}>
+                      {sig.action}
+                    </span>
+                    <span className="font-bold text-lg">{sig.label}</span>
+                    <span className="text-neutral-500 text-sm">{sig.symbol}</span>
+                  </div>
+                  <div className="flex items-center gap-3 text-sm">
+                    <span className="text-yellow-400">Lag: {fmt(sig.lagScore, 2)}%</span>
+                    <span className="text-neutral-400">Corr: {fmt(sig.correlation, 2)}</span>
+                    <span className="text-blue-400">Conf: {sig.confidence}%</span>
+                    <span className="text-purple-400">R:R {fmt(sig.riskReward)}</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-4 text-sm mb-4">
+                  <div>
+                    <p className="text-neutral-500 text-xs">Entry</p>
+                    <p className="font-mono font-bold">${fmtPrice(sig.entry)}</p>
+                  </div>
+                  <div>
+                    <p className="text-neutral-500 text-xs">Stop Loss</p>
+                    <p className="font-mono font-bold text-red-400">${fmtPrice(sig.stopLoss)}</p>
+                  </div>
+                  <div>
+                    <p className="text-neutral-500 text-xs">Take Profit</p>
+                    <p className="font-mono font-bold text-emerald-400">${fmtPrice(sig.takeProfit)}</p>
+                  </div>
+                </div>
+
+                {/* Lot Size Selector */}
+                <div className="flex flex-wrap items-center gap-2 mb-3">
+                  <span className="text-neutral-500 text-xs">Lot:</span>
+                  {LOT_PRESETS.map(lot => (
+                    <button
+                      key={lot}
+                      onClick={() => { setSelectedLot(lot); setIsCustomLot(false) }}
+                      className={`px-2.5 py-1 rounded text-xs font-mono transition-colors ${
+                        !isCustomLot && selectedLot === lot
+                          ? 'bg-accent text-white'
+                          : 'bg-neutral-800 text-neutral-400 hover:bg-neutral-700'
+                      }`}
+                    >
+                      {lot}
+                    </button>
+                  ))}
+                  <input
+                    type="number"
+                    placeholder="Custom"
+                    value={customLot}
+                    onChange={e => { setCustomLot(e.target.value); setIsCustomLot(true) }}
+                    className="w-20 px-2 py-1 rounded text-xs bg-neutral-800 text-white border border-neutral-700 font-mono"
+                    step="0.01"
+                    min="0.01"
+                  />
+                </div>
+
+                {/* Execute Button */}
+                <button
+                  onClick={() => executeTrade(sig)}
+                  disabled={executing === sig.id}
+                  className={`w-full py-3 rounded-lg font-bold text-sm transition-all ${
+                    sig.action === 'BUY'
+                      ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                      : 'bg-red-600 hover:bg-red-500 text-white'
+                  } ${executing === sig.id ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  {executing === sig.id
+                    ? 'Executing...'
+                    : `Execute ${sig.action} on MT5 — ${isCustomLot ? customLot : selectedLot} Lot`}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* No Signal State */}
+        {(!analysis?.signals || analysis.signals.length === 0) && !loading && (
+          <div className="card p-6 text-center">
+            <p className="text-neutral-400 text-lg mb-1">Monitoring markets for lag opportunities...</p>
+            <p className="text-neutral-500 text-sm">
+              {btc?.isEvent
+                ? 'BTC event detected — scanning targets for lag'
+                : 'Waiting for significant BTC movement'
+              }
+            </p>
+          </div>
+        )}
+
+        {/* Active Trades */}
+        {analysis?.activeTrades && analysis.activeTrades.some(t => t.status === 'OPEN') && (
+          <div className="card p-5">
+            <h2 className="text-lg font-bold mb-3">Active Trades</h2>
+            <div className="space-y-2">
+              {analysis.activeTrades.filter(t => t.status === 'OPEN').map(trade => (
+                <div key={trade.id} className="flex flex-wrap items-center justify-between gap-3 p-3 bg-neutral-800/50 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                      trade.signal.action === 'BUY' ? 'bg-emerald-600/30 text-emerald-400' : 'bg-red-600/30 text-red-400'
+                    }`}>
+                      {trade.signal.action}
+                    </span>
+                    <span className="font-bold">{trade.signal.label}</span>
+                    <span className="text-neutral-500 text-sm">@ {fmtPrice(trade.openPrice)}</span>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <span className={`font-mono font-bold ${trade.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {trade.pnl >= 0 ? '+' : ''}{fmt(trade.pnlPercent, 3)}%
+                    </span>
+                    <button
+                      onClick={async () => {
+                        await fetch('/api/correlation', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ action: 'close_trade', tradeId: trade.id }),
+                        })
+                        addLog(`Closed trade: ${trade.signal.action} ${trade.signal.label}`)
+                      }}
+                      className="px-3 py-1 bg-neutral-700 hover:bg-neutral-600 rounded text-xs transition-colors"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Trade History */}
+        {analysis?.activeTrades && analysis.activeTrades.some(t => t.status !== 'OPEN') && (
+          <div className="card p-5">
+            <h2 className="text-lg font-bold mb-3">Recent Trades</h2>
+            <div className="space-y-1 max-h-60 overflow-y-auto">
+              {analysis.activeTrades.filter(t => t.status !== 'OPEN').slice(0, 20).map(trade => (
+                <div key={trade.id} className="flex items-center justify-between p-2 text-sm">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${
+                      trade.status === 'TP_HIT' ? 'bg-emerald-500' :
+                      trade.status === 'EMERGENCY_CLOSE' ? 'bg-yellow-500' : 'bg-red-500'
+                    }`} />
+                    <span className={trade.signal.action === 'BUY' ? 'text-emerald-400' : 'text-red-400'}>
+                      {trade.signal.action}
+                    </span>
+                    <span>{trade.signal.label}</span>
+                    <span className="text-neutral-500">@ {fmtPrice(trade.openPrice)}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className={`font-mono ${trade.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {trade.pnl >= 0 ? '+' : ''}{fmt(trade.pnlPercent, 3)}%
+                    </span>
+                    <span className="text-neutral-500 text-xs">
+                      {trade.status.replace('_', ' ')}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Trade Log */}
+        <div className="card p-5">
+          <h2 className="text-lg font-bold mb-3">Activity Log</h2>
+          <div className="bg-neutral-900 rounded-lg p-3 max-h-48 overflow-y-auto font-mono text-xs space-y-1">
+            {tradeLog.length === 0 ? (
+              <p className="text-neutral-600">No activity yet...</p>
+            ) : (
+              tradeLog.map((log, i) => (
+                <p key={i} className="text-neutral-400">{log}</p>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Status Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-neutral-500 px-1">
+          <span>
+            WebSocket: {connected ? '🟢 Connected' : '🔴 Disconnected'}
+            {' | '}
+            Polling: every 3s
+            {' | '}
+            Targets: {analysis?.targets.length || 0}
+          </span>
+          <span>
+            Last update: {analysis ? new Date(analysis.timestamp).toLocaleTimeString() : '—'}
+          </span>
+        </div>
+
+      </div>
+    </ProtectedPage>
+  )
+}
