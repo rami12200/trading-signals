@@ -255,24 +255,54 @@ function bollingerBands(closes: number[], period: number = 20, mult: number = 2)
 function last<T>(arr: T[]): T { return arr[arr.length - 1] }
 function prev<T>(arr: T[], n = 1): T { return arr[arr.length - 1 - n] }
 
-// ─── Layer 1: Market Regime Detection ────────────────────────────────────────
+// ─── Layer 1: Market Regime Detection (Multi-EMA + ADX-style) ────────────────
 
-function detectRegime(candles: Candle[], atrValues: number[]): { regime: MarketRegime; detail: string } {
+function detectRegime(candles: Candle[], atrValues: number[]): { regime: MarketRegime; detail: string; confidence: number } {
   const closes = candles.map(c => c.close)
+  const ema20 = ema(closes, Math.min(20, closes.length))
   const ema50 = ema(closes, Math.min(50, closes.length))
+  const len = closes.length
+
   const currentATR = last(atrValues)
-  const avgATR = atrValues.slice(-20).reduce((a, b) => a + b, 0) / 20
+  const avgATR = atrValues.slice(-30).reduce((a, b) => a + b, 0) / Math.min(30, atrValues.length)
   const atrRatio = currentATR / avgATR
 
   const price = last(closes)
-  const emaVal = last(ema50)
-  const slope = (ema50[ema50.length - 1] - ema50[Math.max(0, ema50.length - 10)]) / ema50[Math.max(0, ema50.length - 10)] * 100
+  const e20 = last(ema20)
+  const e50 = last(ema50)
 
-  if (atrRatio > 1.5) return { regime: 'HIGH_VOLATILITY', detail: `ATR ratio ${atrRatio.toFixed(2)}x — High volatility environment` }
-  if (atrRatio < 0.6) return { regime: 'LOW_VOLATILITY', detail: `ATR ratio ${atrRatio.toFixed(2)}x — Low volatility compression` }
-  if (Math.abs(slope) > 0.15 && price > emaVal) return { regime: 'TRENDING_UP', detail: `Price above EMA50, slope +${slope.toFixed(2)}%` }
-  if (Math.abs(slope) > 0.15 && price < emaVal) return { regime: 'TRENDING_DOWN', detail: `Price below EMA50, slope ${slope.toFixed(2)}%` }
-  return { regime: 'RANGE_BOUND', detail: `Flat EMA50 slope ${slope.toFixed(2)}% — Range-bound market` }
+  // EMA slopes over last 15 bars (more responsive)
+  const slope20 = len > 15 ? (ema20[len - 1] - ema20[len - 15]) / ema20[len - 15] * 100 : 0
+  const slope50 = len > 15 ? (ema50[len - 1] - ema50[len - 15]) / ema50[len - 15] * 100 : 0
+
+  // Price position relative to EMAs
+  const aboveBoth = price > e20 && price > e50
+  const belowBoth = price < e20 && price < e50
+  const emasAligned = (e20 > e50 && slope20 > 0 && slope50 > 0) || (e20 < e50 && slope20 < 0 && slope50 < 0)
+
+  // ADX-style trend strength: consecutive higher/lower closes
+  const recent20 = closes.slice(-20)
+  let upBars = 0, downBars = 0
+  for (let i = 1; i < recent20.length; i++) {
+    if (recent20[i] > recent20[i - 1]) upBars++
+    else if (recent20[i] < recent20[i - 1]) downBars++
+  }
+  const trendStrength = Math.abs(upBars - downBars) / recent20.length
+
+  if (atrRatio > 1.8) return { regime: 'HIGH_VOLATILITY', detail: `ATR ratio ${atrRatio.toFixed(2)}x — High volatility`, confidence: 0.5 }
+  if (atrRatio < 0.5) return { regime: 'LOW_VOLATILITY', detail: `ATR ratio ${atrRatio.toFixed(2)}x — Compression`, confidence: 0.6 }
+
+  // Require BOTH EMAs to agree + price position + minimum trend strength
+  if (aboveBoth && emasAligned && e20 > e50 && slope50 > 0.2 && trendStrength > 0.15) {
+    const conf = Math.min(0.95, 0.5 + trendStrength + Math.abs(slope50) * 0.5)
+    return { regime: 'TRENDING_UP', detail: `EMA20>${"EMA50"}, slope50 +${slope50.toFixed(2)}%, strength ${(trendStrength * 100).toFixed(0)}%`, confidence: conf }
+  }
+  if (belowBoth && emasAligned && e20 < e50 && slope50 < -0.2 && trendStrength > 0.15) {
+    const conf = Math.min(0.95, 0.5 + trendStrength + Math.abs(slope50) * 0.5)
+    return { regime: 'TRENDING_DOWN', detail: `EMA20<EMA50, slope50 ${slope50.toFixed(2)}%, strength ${(trendStrength * 100).toFixed(0)}%`, confidence: conf }
+  }
+
+  return { regime: 'RANGE_BOUND', detail: `Mixed signals — slope20 ${slope20.toFixed(2)}%, slope50 ${slope50.toFixed(2)}%`, confidence: 0.4 }
 }
 
 // ─── Layer 2: Market Structure ───────────────────────────────────────────────
@@ -851,30 +881,31 @@ function analyzeVolatility(candles: Candle[]): LayerResult & { atrVal: number; b
   }
 }
 
-// ─── AI Probability Engine ───────────────────────────────────────────────────
+// ─── AI Probability Engine (Calibrated) ──────────────────────────────────────
 
-function computeProbability(layers: LayerResult[], regime: MarketRegime, htf?: HTFContext): { probability: number; direction: SignalDirection | null; label: string } {
+function computeProbability(layers: LayerResult[], regime: MarketRegime, regimeConfidence: number, htf?: HTFContext): { probability: number; direction: SignalDirection | null; label: string } {
+  const totalLayers = layers.length
   let bullishWeighted = 0, bearishWeighted = 0
-  let activeWeight = 0
+  let totalWeight = 0
 
   for (const layer of layers) {
     const w = layer.weight
+    totalWeight += w
     if (layer.direction === 'BULLISH') {
       bullishWeighted += layer.score * w
-      activeWeight += w
     } else if (layer.direction === 'BEARISH') {
       bearishWeighted += layer.score * w
-      activeWeight += w
     }
-    // NEUTRAL layers are excluded — they don't dilute the score
+    // NEUTRAL layers count toward totalWeight → dilutes score (realistic)
   }
 
-  if (activeWeight === 0) {
+  if (totalWeight === 0) {
     return { probability: 0, direction: null, label: 'LOW' }
   }
 
-  const bullProb = Math.round(bullishWeighted / activeWeight)
-  const bearProb = Math.round(bearishWeighted / activeWeight)
+  // Include ALL layers in denominator so neutrals dilute the score
+  const bullProb = Math.round(bullishWeighted / totalWeight)
+  const bearProb = Math.round(bearishWeighted / totalWeight)
 
   const bullishCount = layers.filter(l => l.direction === 'BULLISH').length
   const bearishCount = layers.filter(l => l.direction === 'BEARISH').length
@@ -883,64 +914,62 @@ function computeProbability(layers: LayerResult[], regime: MarketRegime, htf?: H
   let direction: SignalDirection | null = null
   let probability = 0
 
-  if (bullishCount > bearishCount && bullishCount >= 3) {
+  // Need clear majority (>50% of layers agreeing)
+  if (bullishCount > bearishCount && bullishCount >= Math.ceil(totalLayers * 0.4)) {
     direction = 'BUY'
     probability = bullProb
-  } else if (bearishCount > bullishCount && bearishCount >= 3) {
+  } else if (bearishCount > bullishCount && bearishCount >= Math.ceil(totalLayers * 0.4)) {
     direction = 'SELL'
     probability = bearProb
   }
 
-  // Conflict penalty: if opposing layers exist, reduce confidence
+  if (!direction) return { probability: 0, direction: null, label: 'LOW' }
+
+  // Conflict penalty: stronger than before
   const opposingCount = direction === 'BUY' ? bearishCount : bullishCount
-  if (opposingCount >= 2) probability = Math.max(0, probability - opposingCount * 5)
+  if (opposingCount >= 3) probability = Math.max(0, probability - opposingCount * 8)
+  else if (opposingCount >= 2) probability = Math.max(0, probability - opposingCount * 5)
 
-  // Consensus bonus: many layers agree
+  // Consensus bonus (only if opposing is low)
   const agreeCount = direction === 'BUY' ? bullishCount : bearishCount
-  if (agreeCount >= 6) probability = Math.min(100, probability + 8)
-  else if (agreeCount >= 5) probability = Math.min(100, probability + 5)
+  if (agreeCount >= 7 && opposingCount <= 1) probability = Math.min(85, probability + 5)
+  else if (agreeCount >= 6 && opposingCount <= 1) probability = Math.min(85, probability + 3)
 
-  // Real data confirmation: Order Flow + Order Book + OI all agree
-  const realDataLayers = ['Order Flow', 'Order Book', 'Open Interest']
-  const targetDir = direction === 'BUY' ? 'BULLISH' : 'BEARISH'
-  const realAgreeing = layers.filter(l => realDataLayers.includes(l.name) && l.direction === targetDir).length
-  if (realAgreeing >= 3) probability = Math.min(100, probability + 7)
-  else if (realAgreeing >= 2) probability = Math.min(100, probability + 3)
+  // Too many neutrals = market has no conviction
+  if (neutralCount >= 4) probability = Math.max(0, probability - neutralCount * 3)
 
-  // Too many neutrals = low conviction
-  if (neutralCount >= 5) probability = Math.max(0, probability - 8)
+  // ─── Regime alignment (softer — no hard block) ────────────────────────
+  if (regime === 'TRENDING_UP' && direction === 'BUY') probability = Math.min(85, probability + 5)
+  if (regime === 'TRENDING_DOWN' && direction === 'SELL') probability = Math.min(85, probability + 5)
+  if (regime === 'HIGH_VOLATILITY') probability = Math.max(0, probability - 10)
 
-  // ─── Regime + HTF Double Block ──────────────────────────────────────────
-  // Regime alignment
-  if (regime === 'TRENDING_UP' && direction === 'BUY') probability = Math.min(100, probability + 8)
-  if (regime === 'TRENDING_DOWN' && direction === 'SELL') probability = Math.min(100, probability + 8)
-  if (regime === 'HIGH_VOLATILITY') probability = Math.max(0, probability - 8)
+  // Soft block: penalize counter-trend but don't hard-block
+  // (the old hard-block caused the system to keep selling into reversals)
+  if (regime === 'TRENDING_UP' && direction === 'SELL') {
+    if (regimeConfidence > 0.7) { probability = 0; direction = null }
+    else probability = Math.max(0, probability - 20)
+  }
+  if (regime === 'TRENDING_DOWN' && direction === 'BUY') {
+    if (regimeConfidence > 0.7) { probability = 0; direction = null }
+    else probability = Math.max(0, probability - 20)
+  }
 
-  // HARD BLOCK by regime: never trade against a clear regime trend
-  if (regime === 'TRENDING_UP' && direction === 'SELL') { probability = 0; direction = null }
-  if (regime === 'TRENDING_DOWN' && direction === 'BUY') { probability = 0; direction = null }
-
-  // HTF alignment (only if regime didn't already block)
+  // HTF alignment
   if (htf && direction) {
-    const htfTrendUp = htf.trend === 'UP'
-    const htfTrendDown = htf.trend === 'DOWN'
-
-    if (direction === 'BUY' && htfTrendUp) {
-      probability = Math.min(100, probability + 10)
-    } else if (direction === 'SELL' && htfTrendDown) {
-      probability = Math.min(100, probability + 10)
-    } else if (direction === 'BUY' && htfTrendDown) {
+    if (direction === 'BUY' && htf.trend === 'UP') probability = Math.min(85, probability + 5)
+    else if (direction === 'SELL' && htf.trend === 'DOWN') probability = Math.min(85, probability + 5)
+    else if (direction === 'BUY' && htf.trend === 'DOWN' && htf.structure === 'BEARISH') {
       probability = 0; direction = null
-    } else if (direction === 'SELL' && htfTrendUp) {
+    } else if (direction === 'SELL' && htf.trend === 'UP' && htf.structure === 'BULLISH') {
       probability = 0; direction = null
-    } else if (htf.trend === 'RANGE') {
-      probability = Math.max(0, probability - 5)
     }
   }
 
-  const label = probability >= 90 ? 'EXTREME OPPORTUNITY' :
-    probability >= 85 ? 'INSTITUTIONAL SETUP' :
-    probability >= 75 ? 'HIGH PROBABILITY' :
+  // HARD CAP at 85% — no crypto signal is ever >85% reliable
+  probability = Math.min(85, probability)
+
+  const label = probability >= 80 ? 'HIGH PROBABILITY' :
+    probability >= 70 ? 'MODERATE-HIGH' :
     probability >= 60 ? 'MODERATE' : 'LOW'
 
   return { probability, direction, label }
@@ -985,23 +1014,22 @@ export function buildHTFContext(htfCandles: Candle[], interval: string): HTFCont
 // ─── Signal Generation ───────────────────────────────────────────────────────
 
 function getDynamicSLTP(regime: MarketRegime, probability: number): { slMult: number; tpMult: number } {
+  // Wider SL across the board — crypto is volatile
   if (regime === 'TRENDING_UP' || regime === 'TRENDING_DOWN') {
-    if (probability >= 85) return { slMult: 2.5, tpMult: 5.5 }
-    if (probability >= 75) return { slMult: 2.8, tpMult: 5.0 }
-    return { slMult: 3.0, tpMult: 4.5 }
+    if (probability >= 80) return { slMult: 3.0, tpMult: 5.0 }
+    return { slMult: 3.5, tpMult: 5.0 }
   }
   if (regime === 'RANGE_BOUND') {
-    if (probability >= 85) return { slMult: 1.3, tpMult: 2.8 }
-    return { slMult: 1.5, tpMult: 2.7 }
+    if (probability >= 80) return { slMult: 2.0, tpMult: 3.5 }
+    return { slMult: 2.2, tpMult: 3.5 }
   }
   if (regime === 'HIGH_VOLATILITY') {
-    return { slMult: 2.8, tpMult: 4.5 }
+    return { slMult: 3.5, tpMult: 5.0 }
   }
   if (regime === 'LOW_VOLATILITY') {
-    if (probability >= 80) return { slMult: 1.5, tpMult: 3.0 }
-    return { slMult: 1.8, tpMult: 2.5 }
+    return { slMult: 2.0, tpMult: 3.5 }
   }
-  return { slMult: 2.0, tpMult: 3.5 }
+  return { slMult: 2.5, tpMult: 4.0 }
 }
 
 function generateSignal(
@@ -1053,6 +1081,90 @@ function markSignalSent(pair: string, direction: SignalDirection): void {
   signalCooldownMap[key] = { direction, timestamp: Date.now() }
 }
 
+// ─── Consecutive Loss Circuit Breaker ────────────────────────────────────────
+
+const lossTracker: Record<string, { consecutive: number; lastLossTime: number; pauseUntil: number }> = {}
+
+export function recordTradeResult(pair: string, result: 'WIN' | 'LOSS') {
+  if (!lossTracker[pair]) lossTracker[pair] = { consecutive: 0, lastLossTime: 0, pauseUntil: 0 }
+  if (result === 'LOSS') {
+    lossTracker[pair].consecutive++
+    lossTracker[pair].lastLossTime = Date.now()
+    // After 5 consecutive losses: pause for 3 hours
+    if (lossTracker[pair].consecutive >= 5) {
+      lossTracker[pair].pauseUntil = Date.now() + 3 * 60 * 60 * 1000
+    }
+    // After 8 consecutive losses: pause for 8 hours
+    if (lossTracker[pair].consecutive >= 8) {
+      lossTracker[pair].pauseUntil = Date.now() + 8 * 60 * 60 * 1000
+    }
+  } else {
+    lossTracker[pair].consecutive = 0
+  }
+}
+
+function isCircuitBroken(pair: string): { broken: boolean; reason: string } {
+  const tracker = lossTracker[pair]
+  if (!tracker) return { broken: false, reason: '' }
+  if (Date.now() < tracker.pauseUntil) {
+    const minsLeft = Math.round((tracker.pauseUntil - Date.now()) / 60000)
+    return { broken: true, reason: `Circuit breaker: ${tracker.consecutive} consecutive losses. Paused for ${minsLeft}m` }
+  }
+  // Auto-reset after pause period
+  if (tracker.consecutive >= 5 && Date.now() >= tracker.pauseUntil && tracker.pauseUntil > 0) {
+    tracker.consecutive = 0
+    tracker.pauseUntil = 0
+  }
+  return { broken: false, reason: '' }
+}
+
+// ─── Momentum Divergence Detection (early reversal warning) ──────────────────
+
+function detectMomentumDivergence(candles: Candle[]): { divergence: boolean; type: 'BULLISH_DIV' | 'BEARISH_DIV' | 'NONE' } {
+  if (candles.length < 30) return { divergence: false, type: 'NONE' }
+
+  const closes = candles.map(c => c.close)
+  const rsiVals = rsi(closes, 14)
+
+  const recent = candles.slice(-20)
+  const recentRSI = rsiVals.slice(-20)
+
+  // Find last two swing lows/highs in price
+  const priceLows: { idx: number; price: number; rsi: number }[] = []
+  const priceHighs: { idx: number; price: number; rsi: number }[] = []
+
+  for (let i = 2; i < recent.length - 2; i++) {
+    if (recent[i].low < recent[i - 1].low && recent[i].low < recent[i - 2].low &&
+        recent[i].low < recent[i + 1].low && recent[i].low < recent[i + 2].low) {
+      priceLows.push({ idx: i, price: recent[i].low, rsi: recentRSI[i] })
+    }
+    if (recent[i].high > recent[i - 1].high && recent[i].high > recent[i - 2].high &&
+        recent[i].high > recent[i + 1].high && recent[i].high > recent[i + 2].high) {
+      priceHighs.push({ idx: i, price: recent[i].high, rsi: recentRSI[i] })
+    }
+  }
+
+  // Bullish divergence: price makes lower low but RSI makes higher low
+  if (priceLows.length >= 2) {
+    const a = priceLows[priceLows.length - 2]
+    const b = priceLows[priceLows.length - 1]
+    if (b.price < a.price && b.rsi > a.rsi) {
+      return { divergence: true, type: 'BULLISH_DIV' }
+    }
+  }
+
+  // Bearish divergence: price makes higher high but RSI makes lower high
+  if (priceHighs.length >= 2) {
+    const a = priceHighs[priceHighs.length - 2]
+    const b = priceHighs[priceHighs.length - 1]
+    if (b.price > a.price && b.rsi < a.rsi) {
+      return { divergence: true, type: 'BEARISH_DIV' }
+    }
+  }
+
+  return { divergence: false, type: 'NONE' }
+}
+
 // ─── Main Analysis Function ──────────────────────────────────────────────────
 
 export function runQuantAnalysis(
@@ -1093,8 +1205,8 @@ export function runQuantAnalysis(
   const atrVal = last(atrValues)
   const priceChange = ((last(candles).close - candles[candles.length - 10].close) / candles[candles.length - 10].close) * 100
 
-  // Detect regime
-  const { regime, detail: regimeDetail } = detectRegime(candles, atrValues)
+  // Detect regime (now returns confidence)
+  const { regime, detail: regimeDetail, confidence: regimeConfidence } = detectRegime(candles, atrValues)
 
   // Run all layers
   const swingPoints = detectSwingPoints(candles)
@@ -1123,8 +1235,14 @@ export function runQuantAnalysis(
     fundingLayer,
   ]
 
-  // Compute probability (with optional HTF alignment)
-  const { probability, direction, label } = computeProbability(layers, regime, htfContext)
+  // Compute probability (calibrated — with regime confidence)
+  const { probability, direction, label } = computeProbability(layers, regime, regimeConfidence, htfContext)
+
+  // Momentum divergence: early reversal warning
+  const divergence = detectMomentumDivergence(candles)
+
+  // Circuit breaker check
+  const circuitCheck = isCircuitBroken(pair)
 
   // Generate signal with quality filter
   let signal: QuantSignal | null = null
@@ -1137,38 +1255,44 @@ export function runQuantAnalysis(
     (direction === 'SELL' && l.direction === 'BULLISH')
   ).length
 
-  // RSI overbought/oversold filter
+  // RSI overbought/oversold filter (wider bands for crypto)
   const rsiVal = momentumLayer.rsiVal
-  const rsiBlocked = (direction === 'BUY' && rsiVal > 70) || (direction === 'SELL' && rsiVal < 30)
+  const rsiBlocked = (direction === 'BUY' && rsiVal > 75) || (direction === 'SELL' && rsiVal < 25)
 
-  // Price extension filter: don't buy at the top of a trend / sell at the bottom
+  // Price extension filter
   const ema21Val = momentumLayer.ema21
   const priceExtension = ema21Val > 0 ? (price - ema21Val) / atrVal : 0
-  const extensionBlocked = (direction === 'BUY' && priceExtension > 1.5)
-    || (direction === 'SELL' && priceExtension < -1.5)
+  const extensionBlocked = (direction === 'BUY' && priceExtension > 2.0)
+    || (direction === 'SELL' && priceExtension < -2.0)
 
-  const passesFilter = probability >= 70
+  // Divergence block: if momentum diverges against signal direction, reduce or block
+  const divergenceBlocked = (divergence.type === 'BEARISH_DIV' && direction === 'BUY')
+    || (divergence.type === 'BULLISH_DIV' && direction === 'SELL')
+
+  const passesFilter = probability >= 65
     && direction !== null
-    && agreeingLayers >= 3
+    && agreeingLayers >= 4
     && opposingLayers <= 2
-    && !(regime === 'HIGH_VOLATILITY' && probability < 75)
+    && !(regime === 'HIGH_VOLATILITY' && probability < 70)
     && !rsiBlocked
     && !extensionBlocked
+    && !divergenceBlocked
+    && !circuitCheck.broken
     && !isOnCooldown(pair, direction!)
 
   if (passesFilter) {
     signal = generateSignal(pair, price, direction!, probability, label, atrVal, regime, layers)
 
-    // Enforce minimum R:R of 1.8 in RANGE_BOUND
-    if (regime === 'RANGE_BOUND' && signal) {
+    // Enforce minimum R:R
+    if (signal) {
       const rr = parseFloat(signal.riskReward.split(':')[1])
-      if (rr < 1.8) signal = null
+      if (rr < 1.4) signal = null
     }
 
-    // Enforce minimum SL distance of 0.3% of entry price
+    // Enforce minimum SL distance of 0.5% (wider for crypto)
     if (signal) {
       const slDist = Math.abs(signal.entry - signal.stopLoss)
-      const minSlDist = signal.entry * 0.003
+      const minSlDist = signal.entry * 0.005
       if (slDist < minSlDist) signal = null
     }
 
