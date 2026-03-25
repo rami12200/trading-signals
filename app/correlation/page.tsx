@@ -96,7 +96,27 @@ interface CorrelationAnalysis {
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
-const ALL_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT']
+const TARGET_OPTIONS = [
+  { symbol: 'ETHUSDT', label: 'ETH' },
+  { symbol: 'SOLUSDT', label: 'SOL' },
+  { symbol: 'BNBUSDT', label: 'BNB' },
+  { symbol: 'XRPUSDT', label: 'XRP' },
+  { symbol: 'ADAUSDT', label: 'ADA' },
+]
+
+const STORAGE_KEY = 'hf_selected_symbols'
+
+function loadSelectedSymbols(): string[] {
+  if (typeof window === 'undefined') return TARGET_OPTIONS.map(t => t.symbol)
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY)
+    if (saved) {
+      const parsed = JSON.parse(saved) as string[]
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed
+    }
+  } catch {}
+  return TARGET_OPTIONS.map(t => t.symbol)
+}
 
 const LOT_PRESETS = [0.01, 0.05, 0.1, 0.5, 1.0]
 
@@ -114,7 +134,11 @@ const POLL_INTERVAL = 500 // HF: 500ms
 
 export default function CorrelationPage() {
   const { user } = useAuth()
-  const { prices, connected } = useBinanceWS(ALL_SYMBOLS)
+  const [selectedSymbols, setSelectedSymbols] = useState<string[]>(loadSelectedSymbols)
+  const [showSymbolPicker, setShowSymbolPicker] = useState(false)
+
+  const wsSymbols = ['BTCUSDT', ...selectedSymbols]
+  const { prices, connected } = useBinanceWS(wsSymbols)
 
   const [analysis, setAnalysis] = useState<CorrelationAnalysis | null>(null)
   const [loading, setLoading] = useState(true)
@@ -133,6 +157,15 @@ export default function CorrelationPage() {
   const audioCtxRef = useRef<AudioContext | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const fetchingRef = useRef(false)
+
+  const toggleSymbol = (sym: string) => {
+    setSelectedSymbols(prev => {
+      const next = prev.includes(sym) ? prev.filter(s => s !== sym) : [...prev, sym]
+      if (next.length === 0) return prev
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      return next
+    })
+  }
 
   // ─── Sound Alert ─────────────────────────────────────────────────────────────
 
@@ -168,7 +201,8 @@ export default function CorrelationPage() {
     if (fetchingRef.current) return
     fetchingRef.current = true
     try {
-      const res = await fetch('/api/correlation?interval=1m')
+      const symbolsQuery = selectedSymbols.join(',')
+      const res = await fetch(`/api/correlation?interval=1m&symbols=${symbolsQuery}`)
       const json = await res.json()
       if (json.success && json.data) {
         setAnalysis(json.data)
@@ -323,6 +357,58 @@ export default function CorrelationPage() {
             <div className={`w-3 h-3 rounded-full ${connected ? 'bg-emerald-500' : 'bg-red-500'} animate-pulse`}
                  title={connected ? 'متصل' : 'غير متصل'} />
           </div>
+        </div>
+
+        {/* اختيار العملات */}
+        <div className="card p-4">
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-bold flex items-center gap-2">
+              اختر العملات المستهدفة
+              <span className="text-neutral-500 font-normal text-xs">(حسب البروكر)</span>
+            </h2>
+            <button
+              onClick={() => setShowSymbolPicker(!showSymbolPicker)}
+              className="text-xs text-neutral-400 hover:text-white transition-colors"
+            >
+              {showSymbolPicker ? 'إخفاء' : 'تعديل'}
+            </button>
+          </div>
+
+          {showSymbolPicker ? (
+            <div className="flex flex-wrap gap-2">
+              {TARGET_OPTIONS.map(opt => {
+                const isActive = selectedSymbols.includes(opt.symbol)
+                return (
+                  <button
+                    key={opt.symbol}
+                    onClick={() => toggleSymbol(opt.symbol)}
+                    className={`px-4 py-2 rounded-lg text-sm font-bold transition-all border ${
+                      isActive
+                        ? 'bg-accent/20 border-accent text-accent'
+                        : 'bg-neutral-800/50 border-neutral-700 text-neutral-500 hover:border-neutral-500'
+                    }`}
+                  >
+                    {opt.label}
+                    <span className="text-xs mr-1 opacity-60">{opt.symbol}</span>
+                  </button>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {selectedSymbols.map(sym => {
+                const opt = TARGET_OPTIONS.find(t => t.symbol === sym)
+                return (
+                  <span key={sym} className="px-3 py-1 rounded-full bg-accent/10 text-accent text-xs font-bold">
+                    {opt?.label || sym}
+                  </span>
+                )
+              })}
+              {selectedSymbols.length === 0 && (
+                <span className="text-neutral-500 text-xs">لم يتم اختيار أي عملة</span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* حالة BTC القائد */}
@@ -705,7 +791,7 @@ export default function CorrelationPage() {
             {' | '}
             التحديث: كل 500 مللي ثانية
             {' | '}
-            الأهداف: {analysis?.targets.length || 0}
+            الأهداف: {selectedSymbols.length}/{TARGET_OPTIONS.length}
             {' | '}
             صفقات مفتوحة: {analysis?.activeTrades.filter(t => t.status === 'OPEN').length || 0}/15
           </span>

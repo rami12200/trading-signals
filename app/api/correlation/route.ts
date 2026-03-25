@@ -90,11 +90,16 @@ export async function GET(request: Request) {
 
     const { searchParams } = new URL(request.url)
     const interval = searchParams.get('interval') || '1m'
+    const symbolsParam = searchParams.get('symbols') || ''
     const limit = 100
 
-    const targets: TargetConfig[] = CORRELATION_TARGETS
+    let targets: TargetConfig[] = CORRELATION_TARGETS
+    if (symbolsParam) {
+      const allowed = symbolsParam.split(',').map(s => s.trim().toUpperCase())
+      targets = targets.filter(t => allowed.includes(t.symbol))
+    }
 
-    const cacheKey = `hf_${interval}`
+    const cacheKey = `hf_${interval}_${targets.map(t => t.symbol).join(',')}`
     const cached = getCached(cacheKey)
     if (cached) {
       return NextResponse.json({ success: true, data: cached })
