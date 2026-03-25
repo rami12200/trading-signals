@@ -9,12 +9,20 @@ import { useBinanceWS } from '@/hooks/useBinanceWS'
 
 interface BTCState {
   currentPrice: number
-  changes: { '30s': number; '1m': number; '3m': number; '5m': number }
+  changes: { '5s': number; '10s': number; '30s': number; '1m': number; '3m': number; '5m': number }
   momentum: number
   acceleration: number
   direction: string
   isEvent: boolean
   eventStrength: number
+}
+
+interface OrderBookImbalance {
+  bidVolume: number
+  askVolume: number
+  ratio: number
+  direction: 'BUY' | 'SELL' | 'NEUTRAL'
+  strength: number
 }
 
 interface LagOpportunity {
@@ -28,6 +36,7 @@ interface LagOpportunity {
   direction: 'BUY' | 'SELL'
   confidence: number
   microPullbackDetected: boolean
+  orderBookAligned: boolean
   reason: string
 }
 
@@ -37,12 +46,15 @@ interface TargetAnalysis {
   currentPrice: number
   change1m: number
   change5m: number
+  change5s: number
+  change10s: number
   correlation: number
   lagScore: number
   lagDetected: boolean
   opportunity: LagOpportunity | null
   atr: number
   rsi: number | null
+  orderBook: OrderBookImbalance | null
 }
 
 interface CorrelationSignal {
@@ -96,6 +108,8 @@ const DIR_LABELS: Record<string, string> = {
   'STRONG_BEARISH': 'هبوط قوي',
 }
 
+const POLL_INTERVAL = 500 // HF: 500ms
+
 // ─── Component ─────────────────────────────────────────────────────────────────
 
 export default function CorrelationPage() {
@@ -114,9 +128,11 @@ export default function CorrelationPage() {
   const [tradeLog, setTradeLog] = useState<string[]>([])
   const [executing, setExecuting] = useState<string | null>(null)
   const [lastSignalId, setLastSignalId] = useState<string | null>(null)
+  const [signalCount, setSignalCount] = useState(0)
 
   const audioCtxRef = useRef<AudioContext | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const fetchingRef = useRef(false)
 
   // ─── Sound Alert ─────────────────────────────────────────────────────────────
 
@@ -133,22 +149,24 @@ export default function CorrelationPage() {
       gain.gain.value = 0.3
 
       osc.frequency.setValueAtTime(880, ctx.currentTime)
-      osc.frequency.setValueAtTime(1100, ctx.currentTime + 0.15)
-      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.3)
-      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5)
+      osc.frequency.setValueAtTime(1100, ctx.currentTime + 0.1)
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.2)
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3)
       osc.start(ctx.currentTime)
-      osc.stop(ctx.currentTime + 0.5)
+      osc.stop(ctx.currentTime + 0.3)
     } catch {}
   }, [soundEnabled])
 
   const triggerFlash = useCallback(() => {
     setSignalFlash(true)
-    setTimeout(() => setSignalFlash(false), 3000)
+    setTimeout(() => setSignalFlash(false), 2000)
   }, [])
 
   // ─── Fetch Analysis ──────────────────────────────────────────────────────────
 
   const fetchAnalysis = useCallback(async () => {
+    if (fetchingRef.current) return
+    fetchingRef.current = true
     try {
       const res = await fetch('/api/correlation?interval=1m')
       const json = await res.json()
@@ -160,9 +178,10 @@ export default function CorrelationPage() {
           const newest = json.data.signals[0]
           if (newest.id !== lastSignalId) {
             setLastSignalId(newest.id)
+            setSignalCount(c => c + 1)
             playAlert()
             triggerFlash()
-            addLog(`إشارة جديدة: ${newest.action === 'BUY' ? 'شراء' : 'بيع'} ${newest.label} @ ${newest.entry} (تأخر: ${newest.lagScore.toFixed(2)}%)`)
+            addLog(`إشارة جديدة: ${newest.action === 'BUY' ? 'شراء' : 'بيع'} ${newest.label} @ ${newest.entry} (تأخر: ${newest.lagScore.toFixed(3)}%)`)
 
             if (autoTrade && user) {
               executeTrade(newest)
@@ -174,6 +193,7 @@ export default function CorrelationPage() {
       setError('فشل في جلب التحليل')
     } finally {
       setLoading(false)
+      fetchingRef.current = false
     }
   }, [lastSignalId, autoTrade, user, playAlert, triggerFlash])
 
@@ -217,14 +237,14 @@ export default function CorrelationPage() {
 
   const addLog = (msg: string) => {
     const time = new Date().toLocaleTimeString('en-US', { hour12: false })
-    setTradeLog(prev => [`[${time}] ${msg}`, ...prev.slice(0, 99)])
+    setTradeLog(prev => [`[${time}] ${msg}`, ...prev.slice(0, 199)])
   }
 
-  // ─── Polling ─────────────────────────────────────────────────────────────────
+  // ─── Polling (500ms HF) ────────────────────────────────────────────────────
 
   useEffect(() => {
     fetchAnalysis()
-    pollRef.current = setInterval(fetchAnalysis, 3000)
+    pollRef.current = setInterval(fetchAnalysis, POLL_INTERVAL)
     return () => {
       if (pollRef.current) clearInterval(pollRef.current)
     }
@@ -245,6 +265,13 @@ export default function CorrelationPage() {
     return 'text-neutral-400'
   }
 
+  const obLabel = (ob: OrderBookImbalance | null) => {
+    if (!ob) return null
+    if (ob.direction === 'BUY') return { text: `شراء ${ob.strength.toFixed(0)}%`, cls: 'text-emerald-400' }
+    if (ob.direction === 'SELL') return { text: `بيع ${ob.strength.toFixed(0)}%`, cls: 'text-red-400' }
+    return { text: 'متوازن', cls: 'text-neutral-500' }
+  }
+
   const btc = analysis?.btc
   const btcLivePrice = prices['BTCUSDT']?.price
 
@@ -254,7 +281,6 @@ export default function CorrelationPage() {
     <ProtectedPage requiredPlan="vip" featureName="Smart Correlation Scalping">
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-5" dir="rtl">
 
-        {/* تنبيه فلاش عند اكتشاف تأخر */}
         {signalFlash && (
           <div className="fixed top-0 left-0 right-0 z-50 bg-yellow-500/90 text-black text-center py-3 font-bold text-lg animate-pulse">
             تم اكتشاف تأخر — فرصة تداول جديدة!
@@ -264,10 +290,13 @@ export default function CorrelationPage() {
         {/* الهيدر */}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold">سكالبينج الارتباط الذكي</h1>
-            <p className="text-neutral-400 text-sm mt-1">BTC يقود ← العملات تتأخر ← نستغل الفجوة</p>
+            <h1 className="text-2xl font-bold">سكالبينج عالي التردد (HF)</h1>
+            <p className="text-neutral-400 text-sm mt-1">BTC يقود ← العملات تتأخر ← دخول فوري ← خروج سريع</p>
           </div>
           <div className="flex items-center gap-3" dir="ltr">
+            <span className="text-xs font-mono text-neutral-500 bg-neutral-800/50 px-2 py-1 rounded">
+              إشارات: {signalCount}
+            </span>
             <button
               onClick={() => setSoundEnabled(!soundEnabled)}
               className={`px-3 py-2 rounded-lg text-sm transition-colors ${
@@ -309,7 +338,7 @@ export default function CorrelationPage() {
             )}
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-4" dir="ltr">
+          <div className="grid grid-cols-2 md:grid-cols-8 gap-3" dir="ltr">
             <div className="text-center">
               <p className="text-neutral-500 text-xs mb-1">السعر</p>
               <p className="text-xl font-bold font-mono">
@@ -317,32 +346,44 @@ export default function CorrelationPage() {
               </p>
             </div>
             <div className="text-center">
-              <p className="text-neutral-500 text-xs mb-1">تغير 30 ثانية</p>
-              <p className={`text-lg font-bold font-mono ${(btc?.changes['30s'] || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                {fmt(btc?.changes['30s'] || 0, 3)}%
+              <p className="text-neutral-500 text-xs mb-1">5 ثواني</p>
+              <p className={`text-sm font-bold font-mono ${(btc?.changes['5s'] || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {fmt(btc?.changes['5s'] || 0, 4)}%
               </p>
             </div>
             <div className="text-center">
-              <p className="text-neutral-500 text-xs mb-1">تغير 1 دقيقة</p>
-              <p className={`text-lg font-bold font-mono ${(btc?.changes['1m'] || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                {fmt(btc?.changes['1m'] || 0, 3)}%
+              <p className="text-neutral-500 text-xs mb-1">10 ثواني</p>
+              <p className={`text-sm font-bold font-mono ${(btc?.changes['10s'] || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {fmt(btc?.changes['10s'] || 0, 4)}%
               </p>
             </div>
             <div className="text-center">
-              <p className="text-neutral-500 text-xs mb-1">تغير 5 دقائق</p>
-              <p className={`text-lg font-bold font-mono ${(btc?.changes['5m'] || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                {fmt(btc?.changes['5m'] || 0, 3)}%
+              <p className="text-neutral-500 text-xs mb-1">30 ثانية</p>
+              <p className={`text-sm font-bold font-mono ${(btc?.changes['30s'] || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {fmt(btc?.changes['30s'] || 0, 4)}%
+              </p>
+            </div>
+            <div className="text-center">
+              <p className="text-neutral-500 text-xs mb-1">1 دقيقة</p>
+              <p className={`text-sm font-bold font-mono ${(btc?.changes['1m'] || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {fmt(btc?.changes['1m'] || 0, 4)}%
+              </p>
+            </div>
+            <div className="text-center">
+              <p className="text-neutral-500 text-xs mb-1">5 دقائق</p>
+              <p className={`text-sm font-bold font-mono ${(btc?.changes['5m'] || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {fmt(btc?.changes['5m'] || 0, 4)}%
               </p>
             </div>
             <div className="text-center">
               <p className="text-neutral-500 text-xs mb-1">الزخم</p>
-              <p className={`text-lg font-bold font-mono ${(btc?.momentum || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              <p className={`text-sm font-bold font-mono ${(btc?.momentum || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                 {fmt(btc?.momentum || 0, 3)}
               </p>
             </div>
             <div className="text-center">
               <p className="text-neutral-500 text-xs mb-1">الاتجاه</p>
-              <p className={`text-lg font-bold ${dirColor(btc?.direction || 'NEUTRAL')}`}>
+              <p className={`text-sm font-bold ${dirColor(btc?.direction || 'NEUTRAL')}`}>
                 {DIR_LABELS[btc?.direction || 'NEUTRAL'] || 'محايد'}
               </p>
             </div>
@@ -355,6 +396,7 @@ export default function CorrelationPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
             {analysis?.targets.map(target => {
               const livePrice = prices[target.symbol]?.price || target.currentPrice
+              const ob = obLabel(target.orderBook)
               return (
                 <div key={target.symbol}
                      className={`card p-4 transition-all ${
@@ -367,29 +409,42 @@ export default function CorrelationPage() {
                       <span className="font-bold text-base">{target.label}</span>
                       <span className="text-neutral-500 text-xs">{target.symbol}</span>
                     </div>
-                    {target.lagDetected && (
-                      <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-400 rounded text-xs font-bold animate-pulse">
-                        تأخر!
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {ob && (
+                        <span className={`text-xs ${ob.cls}`} title="Order Book">
+                          OB: {ob.text}
+                        </span>
+                      )}
+                      {target.lagDetected && (
+                        <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-400 rounded text-xs font-bold animate-pulse">
+                          تأخر!
+                        </span>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-3 gap-2 text-sm mb-2" dir="ltr">
+                  <div className="grid grid-cols-4 gap-2 text-sm mb-2" dir="ltr">
                     <div className="text-center">
                       <p className="text-neutral-500 text-xs">السعر</p>
-                      <p className="font-mono font-bold">${fmtPrice(livePrice)}</p>
+                      <p className="font-mono font-bold text-xs">${fmtPrice(livePrice)}</p>
                     </div>
                     <div className="text-center">
-                      <p className="text-neutral-500 text-xs">تغير 1 د</p>
-                      <p className={`font-mono font-bold ${target.change1m >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                        {fmt(target.change1m, 3)}%
+                      <p className="text-neutral-500 text-xs">10 ث</p>
+                      <p className={`font-mono font-bold text-xs ${target.change10s >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {fmt(target.change10s, 4)}%
+                      </p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-neutral-500 text-xs">1 د</p>
+                      <p className={`font-mono font-bold text-xs ${target.change1m >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {fmt(target.change1m, 4)}%
                       </p>
                     </div>
                     <div className="text-center">
                       <p className="text-neutral-500 text-xs">الارتباط</p>
-                      <p className={`font-mono font-bold ${
-                        target.correlation > 0.7 ? 'text-emerald-400' :
-                        target.correlation > 0.45 ? 'text-yellow-400' : 'text-red-400'
+                      <p className={`font-mono font-bold text-xs ${
+                        target.correlation > 0.6 ? 'text-emerald-400' :
+                        target.correlation > 0.25 ? 'text-yellow-400' : 'text-red-400'
                       }`}>
                         {fmt(target.correlation, 2)}
                       </p>
@@ -400,17 +455,17 @@ export default function CorrelationPage() {
                   <div className="mt-2">
                     <div className="flex justify-between text-xs mb-1">
                       <span className="text-neutral-500">درجة التأخر</span>
-                      <span className={target.lagScore > 0.15 ? 'text-yellow-400' : 'text-neutral-500'}>
-                        {fmt(target.lagScore, 3)}%
+                      <span className={target.lagScore > 0.05 ? 'text-yellow-400' : 'text-neutral-500'}>
+                        {fmt(target.lagScore, 4)}%
                       </span>
                     </div>
                     <div className="h-1.5 bg-neutral-800 rounded-full overflow-hidden">
                       <div
-                        className={`h-full rounded-full transition-all duration-500 ${
-                          target.lagScore > 0.3 ? 'bg-yellow-500' :
-                          target.lagScore > 0.15 ? 'bg-yellow-600' : 'bg-neutral-600'
+                        className={`h-full rounded-full transition-all duration-300 ${
+                          target.lagScore > 0.15 ? 'bg-yellow-500' :
+                          target.lagScore > 0.05 ? 'bg-yellow-600' : 'bg-neutral-600'
                         }`}
-                        style={{ width: `${Math.min(100, target.lagScore * 200)}%` }}
+                        style={{ width: `${Math.min(100, target.lagScore * 500)}%` }}
                       />
                     </div>
                   </div>
@@ -422,18 +477,20 @@ export default function CorrelationPage() {
                         <span className={`font-bold ${target.opportunity.direction === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>
                           {target.opportunity.direction === 'BUY' ? 'شراء' : 'بيع'}
                         </span>
-                        <span className="text-yellow-400">
-                          الثقة: {target.opportunity.confidence}%
-                        </span>
+                        <div className="flex items-center gap-2">
+                          {target.opportunity.orderBookAligned && (
+                            <span className="text-blue-400 text-xs">OB✓</span>
+                          )}
+                          <span className="text-yellow-400">
+                            الثقة: {target.opportunity.confidence}%
+                          </span>
+                        </div>
                       </div>
                       <p className="text-neutral-400 leading-relaxed" dir="ltr">
-                        BTC {target.opportunity.btcChange > 0 ? '+' : ''}{fmt(target.opportunity.btcChange, 2)}%
-                        → {target.label} متوقع {fmt(target.opportunity.expectedTargetChange, 2)}%
-                        لكن فقط {fmt(target.opportunity.targetChange, 2)}%
+                        BTC {target.opportunity.btcChange > 0 ? '+' : ''}{fmt(target.opportunity.btcChange, 3)}%
+                        → {target.label} متوقع {fmt(target.opportunity.expectedTargetChange, 3)}%
+                        لكن فقط {fmt(target.opportunity.targetChange, 3)}%
                       </p>
-                      {target.opportunity.microPullbackDetected && (
-                        <p className="text-emerald-400 mt-1">تم تأكيد ارتداد صغير</p>
-                      )}
                     </div>
                   )}
                 </div>
@@ -462,7 +519,7 @@ export default function CorrelationPage() {
                     <span className="text-neutral-500 text-sm">{sig.symbol}</span>
                   </div>
                   <div className="flex items-center gap-3 text-sm" dir="ltr">
-                    <span className="text-yellow-400">تأخر: {fmt(sig.lagScore, 2)}%</span>
+                    <span className="text-yellow-400">تأخر: {fmt(sig.lagScore, 3)}%</span>
                     <span className="text-neutral-400">ارتباط: {fmt(sig.correlation, 2)}</span>
                     <span className="text-blue-400">ثقة: {sig.confidence}%</span>
                     <span className="text-purple-400">R:R {fmt(sig.riskReward)}</span>
@@ -534,11 +591,11 @@ export default function CorrelationPage() {
         {/* حالة عدم وجود إشارة */}
         {(!analysis?.signals || analysis.signals.length === 0) && !loading && (
           <div className="card p-6 text-center">
-            <p className="text-neutral-400 text-lg mb-1">جاري مراقبة الأسواق بحثاً عن فرص التأخر...</p>
+            <p className="text-neutral-400 text-lg mb-1">جاري مراقبة الأسواق بتردد عالي...</p>
             <p className="text-neutral-500 text-sm">
               {btc?.isEvent
                 ? 'تم رصد حدث BTC — جاري فحص العملات المستهدفة'
-                : 'في انتظار حركة قوية من البتكوين'
+                : 'في انتظار حركة من البتكوين (الحد الأدنى: 0.03%)'
               }
             </p>
           </div>
@@ -547,8 +604,8 @@ export default function CorrelationPage() {
         {/* الصفقات المفتوحة */}
         {analysis?.activeTrades && analysis.activeTrades.some(t => t.status === 'OPEN') && (
           <div className="card p-5">
-            <h2 className="text-lg font-bold mb-3">الصفقات المفتوحة</h2>
-            <div className="space-y-2">
+            <h2 className="text-lg font-bold mb-3">الصفقات المفتوحة ({analysis.activeTrades.filter(t => t.status === 'OPEN').length}/{MAX_TOTAL_DISPLAY})</h2>
+            <div className="space-y-2 max-h-72 overflow-y-auto">
               {analysis.activeTrades.filter(t => t.status === 'OPEN').map(trade => (
                 <div key={trade.id} className="flex flex-wrap items-center justify-between gap-3 p-3 bg-neutral-800/50 rounded-lg">
                   <div className="flex items-center gap-3">
@@ -563,6 +620,9 @@ export default function CorrelationPage() {
                   <div className="flex items-center gap-4">
                     <span className={`font-mono font-bold ${trade.pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`} dir="ltr">
                       {trade.pnl >= 0 ? '+' : ''}{fmt(trade.pnlPercent, 3)}%
+                    </span>
+                    <span className="text-neutral-500 text-xs" dir="ltr">
+                      {Math.round((Date.now() - trade.openedAt) / 1000)}s
                     </span>
                     <button
                       onClick={async () => {
@@ -589,7 +649,7 @@ export default function CorrelationPage() {
           <div className="card p-5">
             <h2 className="text-lg font-bold mb-3">آخر الصفقات</h2>
             <div className="space-y-1 max-h-60 overflow-y-auto">
-              {analysis.activeTrades.filter(t => t.status !== 'OPEN').slice(0, 20).map(trade => {
+              {analysis.activeTrades.filter(t => t.status !== 'OPEN').slice(0, 30).map(trade => {
                 const statusLabels: Record<string, string> = {
                   'TP_HIT': 'وصل الهدف',
                   'SL_HIT': 'وصل الوقف',
@@ -643,9 +703,11 @@ export default function CorrelationPage() {
           <span>
             الاتصال: {connected ? '🟢 متصل' : '🔴 غير متصل'}
             {' | '}
-            التحديث: كل 3 ثواني
+            التحديث: كل 500 مللي ثانية
             {' | '}
             الأهداف: {analysis?.targets.length || 0}
+            {' | '}
+            صفقات مفتوحة: {analysis?.activeTrades.filter(t => t.status === 'OPEN').length || 0}/15
           </span>
           <span>
             آخر تحديث: {analysis ? new Date(analysis.timestamp).toLocaleTimeString() : '—'}
@@ -656,3 +718,5 @@ export default function CorrelationPage() {
     </ProtectedPage>
   )
 }
+
+const MAX_TOTAL_DISPLAY = 15

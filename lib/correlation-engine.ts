@@ -1,39 +1,42 @@
 // ============================================
-// Smart Correlation Scalping Engine
-// BTC leads → Altcoins/Gold lag → Exploit the gap
+// High-Frequency Correlation Scalping Engine
+// BTC leads → Altcoins lag → Exploit the gap (HF Mode)
 // ============================================
 
 import { OHLCV, parseKlines, calcATR, calcEMA, latestRSI, latestMACD } from './indicators'
 
-// ─── Configuration ─────────────────────────────────────────────────────────────
+// ─── Configuration (HF Mode — aggressive) ──────────────────────────────────────
 
 export const CORRELATION_TARGETS: TargetConfig[] = [
-  { symbol: 'ETHUSDT', label: 'ETH', beta: 1.1, minLag: 0.15, source: 'binance' },
-  { symbol: 'SOLUSDT', label: 'SOL', beta: 1.8, minLag: 0.20, source: 'binance' },
-  { symbol: 'BNBUSDT', label: 'BNB', beta: 0.8, minLag: 0.12, source: 'binance' },
-  { symbol: 'XRPUSDT', label: 'XRP', beta: 1.3, minLag: 0.18, source: 'binance' },
-  { symbol: 'ADAUSDT', label: 'ADA', beta: 1.4, minLag: 0.20, source: 'binance' },
+  { symbol: 'ETHUSDT', label: 'ETH', beta: 1.1, minLag: 0.05, source: 'binance' },
+  { symbol: 'SOLUSDT', label: 'SOL', beta: 1.8, minLag: 0.08, source: 'binance' },
+  { symbol: 'BNBUSDT', label: 'BNB', beta: 0.8, minLag: 0.04, source: 'binance' },
+  { symbol: 'XRPUSDT', label: 'XRP', beta: 1.3, minLag: 0.06, source: 'binance' },
+  { symbol: 'ADAUSDT', label: 'ADA', beta: 1.4, minLag: 0.07, source: 'binance' },
 ]
 
 const BTC_EVENT_THRESHOLDS = {
-  '30s': 0.15,
-  '1m': 0.25,
-  '3m': 0.40,
-  '5m': 0.60,
+  '5s': 0.03,
+  '10s': 0.04,
+  '30s': 0.05,
+  '1m': 0.08,
+  '3m': 0.15,
+  '5m': 0.25,
 }
 
-const MIN_CORRELATION = 0.45
-const SIGNAL_COOLDOWN_MS = 5 * 60 * 1000
-const MAX_OPEN_TRADES_PER_SYMBOL = 1
-const MAX_TOTAL_TRADES = 5
+const MIN_CORRELATION = 0.25
+const SIGNAL_COOLDOWN_MS = 15 * 1000  // 15 seconds
+const MAX_OPEN_TRADES_PER_SYMBOL = 3
+const MAX_TOTAL_TRADES = 15
+const TRADE_TIMEOUT_MS = 2 * 60 * 1000  // 2 minutes
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 export interface TargetConfig {
   symbol: string
   label: string
-  beta: number      // expected move multiplier relative to BTC
-  minLag: number    // minimum lag % to trigger opportunity
+  beta: number
+  minLag: number
   source: 'binance' | 'fastforex' | 'twelvedata'
 }
 
@@ -42,9 +45,19 @@ export interface PriceSnapshot {
   timestamp: number
 }
 
+export interface OrderBookImbalance {
+  bidVolume: number
+  askVolume: number
+  ratio: number
+  direction: 'BUY' | 'SELL' | 'NEUTRAL'
+  strength: number
+}
+
 export interface BTCState {
   currentPrice: number
   changes: {
+    '5s': number
+    '10s': number
     '30s': number
     '1m': number
     '3m': number
@@ -69,6 +82,7 @@ export interface LagOpportunity {
   direction: 'BUY' | 'SELL'
   confidence: number
   microPullbackDetected: boolean
+  orderBookAligned: boolean
   reason: string
 }
 
@@ -112,12 +126,15 @@ export interface TargetAnalysis {
   currentPrice: number
   change1m: number
   change5m: number
+  change5s: number
+  change10s: number
   correlation: number
   lagScore: number
   lagDetected: boolean
   opportunity: LagOpportunity | null
   atr: number
   rsi: number | null
+  orderBook: OrderBookImbalance | null
 }
 
 export interface CorrelationAnalysis {
@@ -134,7 +151,7 @@ const btcPriceHistory: PriceSnapshot[] = []
 const targetPriceHistories: Record<string, PriceSnapshot[]> = {}
 const lastSignalTime: Record<string, number> = {}
 const activeTrades: ActiveTrade[] = []
-const MAX_HISTORY_LENGTH = 600 // 10 minutes at 1-second intervals
+const MAX_HISTORY_LENGTH = 1200 // ~10 min at 500ms intervals
 
 // ─── Core Functions ────────────────────────────────────────────────────────────
 
@@ -153,10 +170,6 @@ function getChangePercent(history: PriceSnapshot[], secondsBack: number): number
   return ((current.price - oldEntry.price) / oldEntry.price) * 100
 }
 
-/**
- * Pearson correlation coefficient between two price series.
- * Returns value between -1 and 1.
- */
 export function calculateCorrelation(seriesA: number[], seriesB: number[]): number {
   const n = Math.min(seriesA.length, seriesB.length)
   if (n < 10) return 0
@@ -164,7 +177,6 @@ export function calculateCorrelation(seriesA: number[], seriesB: number[]): numb
   const a = seriesA.slice(-n)
   const b = seriesB.slice(-n)
 
-  // Use returns (% changes) instead of raw prices for correlation
   const returnsA: number[] = []
   const returnsB: number[] = []
   for (let i = 1; i < n; i++) {
@@ -193,38 +205,68 @@ export function calculateCorrelation(seriesA: number[], seriesB: number[]): numb
   return covAB / denom
 }
 
+// ─── Order Book Analysis ───────────────────────────────────────────────────────
+
+export function analyzeOrderBook(depthData: { bids: [string, string][], asks: [string, string][] } | null): OrderBookImbalance | null {
+  if (!depthData || !depthData.bids || !depthData.asks) return null
+
+  const topLevels = 10
+  let bidVol = 0
+  let askVol = 0
+
+  for (let i = 0; i < Math.min(topLevels, depthData.bids.length); i++) {
+    bidVol += parseFloat(depthData.bids[i][1])
+  }
+  for (let i = 0; i < Math.min(topLevels, depthData.asks.length); i++) {
+    askVol += parseFloat(depthData.asks[i][1])
+  }
+
+  const total = bidVol + askVol
+  if (total === 0) return null
+
+  const ratio = bidVol / (askVol || 1)
+  let direction: 'BUY' | 'SELL' | 'NEUTRAL' = 'NEUTRAL'
+  let strength = 0
+
+  if (ratio > 1.3) {
+    direction = 'BUY'
+    strength = Math.min(100, (ratio - 1) * 50)
+  } else if (ratio < 0.7) {
+    direction = 'SELL'
+    strength = Math.min(100, (1 / ratio - 1) * 50)
+  }
+
+  return { bidVolume: bidVol, askVolume: askVol, ratio, direction, strength }
+}
+
 // ─── BTC Monitor ───────────────────────────────────────────────────────────────
 
 export function analyzeBTC(currentPrice: number): BTCState {
   addPriceSnapshot(btcPriceHistory, currentPrice)
 
   const changes = {
+    '5s': getChangePercent(btcPriceHistory, 5),
+    '10s': getChangePercent(btcPriceHistory, 10),
     '30s': getChangePercent(btcPriceHistory, 30),
     '1m': getChangePercent(btcPriceHistory, 60),
     '3m': getChangePercent(btcPriceHistory, 180),
     '5m': getChangePercent(btcPriceHistory, 300),
   }
 
-  // Momentum = rate of change (1m change speed)
-  const momentum = changes['1m']
+  const momentum = changes['10s'] * 6 // normalize 10s to per-minute rate
 
-  // Acceleration = change in momentum
   let acceleration = 0
   if (btcPriceHistory.length > 10) {
-    const prevMomentum = getChangePercent(
-      btcPriceHistory.slice(0, -5), 60
-    )
+    const prevMomentum = getChangePercent(btcPriceHistory.slice(0, -3), 10) * 6
     acceleration = momentum - prevMomentum
   }
 
-  // Direction classification
   let direction: BTCState['direction'] = 'NEUTRAL'
-  if (changes['1m'] > 0.4 && changes['3m'] > 0.6) direction = 'STRONG_BULLISH'
-  else if (changes['1m'] > 0.15) direction = 'BULLISH'
-  else if (changes['1m'] < -0.4 && changes['3m'] < -0.6) direction = 'STRONG_BEARISH'
-  else if (changes['1m'] < -0.15) direction = 'BEARISH'
+  if (changes['10s'] > 0.06 || (changes['30s'] > 0.1 && changes['5s'] > 0.02)) direction = 'STRONG_BULLISH'
+  else if (changes['10s'] > 0.02 || changes['30s'] > 0.04) direction = 'BULLISH'
+  else if (changes['10s'] < -0.06 || (changes['30s'] < -0.1 && changes['5s'] < -0.02)) direction = 'STRONG_BEARISH'
+  else if (changes['10s'] < -0.02 || changes['30s'] < -0.04) direction = 'BEARISH'
 
-  // Event detection: BTC moved significantly in a short time
   let isEvent = false
   let eventStrength = 0
 
@@ -246,22 +288,22 @@ export function analyzeBTC(currentPrice: number): BTCState {
     direction,
     isEvent,
     eventStrength,
-    priceHistory: btcPriceHistory.slice(-60),
+    priceHistory: btcPriceHistory.slice(-120),
   }
 }
 
-// ─── Lag Detection ─────────────────────────────────────────────────────────────
+// ─── Lag Detection (HF — immediate entry) ──────────────────────────────────────
 
 export function detectLag(
   btcState: BTCState,
   target: TargetConfig,
   targetPrice: number,
   targetKlines: OHLCV[],
-  btcKlines: OHLCV[]
+  btcKlines: OHLCV[],
+  orderBook: OrderBookImbalance | null
 ): LagOpportunity | null {
   if (!btcState.isEvent) return null
 
-  // Initialize target price history
   if (!targetPriceHistories[target.symbol]) {
     targetPriceHistories[target.symbol] = []
   }
@@ -269,75 +311,62 @@ export function detectLag(
 
   const targetHistory = targetPriceHistories[target.symbol]
 
-  // Calculate target's change over same periods
+  // Use shortest meaningful window for HF
+  const targetChange10s = getChangePercent(targetHistory, 10)
+  const targetChange30s = getChangePercent(targetHistory, 30)
   const targetChange1m = getChangePercent(targetHistory, 60)
-  const targetChange3m = getChangePercent(targetHistory, 180)
 
-  // Use the BTC change from the period with strongest event
-  let btcChange = btcState.changes['1m']
-  let targetChange = targetChange1m
-  if (Math.abs(btcState.changes['3m']) > Math.abs(btcState.changes['1m']) * 1.5) {
-    btcChange = btcState.changes['3m']
-    targetChange = targetChange3m
+  // Pick the BTC window that triggered the event
+  let btcChange = btcState.changes['10s']
+  let targetChange = targetChange10s
+  if (Math.abs(btcState.changes['30s']) > Math.abs(btcState.changes['10s']) * 1.3) {
+    btcChange = btcState.changes['30s']
+    targetChange = targetChange30s
+  }
+  if (Math.abs(btcState.changes['1m']) > Math.abs(btcState.changes['30s']) * 1.5) {
+    btcChange = btcState.changes['1m']
+    targetChange = targetChange1m
   }
 
-  // Calculate rolling correlation from klines
   const btcCloses = btcKlines.map(k => k.close)
   const targetCloses = targetKlines.map(k => k.close)
   const correlation = calculateCorrelation(btcCloses, targetCloses)
 
   if (correlation < MIN_CORRELATION) return null
 
-  // Expected target move based on BTC move, correlation, and beta
   const expectedTargetChange = btcChange * correlation * target.beta
-
-  // Lag score: how much the target is behind its expected move
   const lagGap = Math.abs(expectedTargetChange) - Math.abs(targetChange)
   const lagScore = lagGap
 
   if (lagScore < target.minLag) return null
 
-  // Direction: follow BTC's direction
   const direction: 'BUY' | 'SELL' = btcChange > 0 ? 'BUY' : 'SELL'
 
-  // Verify target isn't already moving in wrong direction
-  if (direction === 'BUY' && targetChange < -0.3) return null
-  if (direction === 'SELL' && targetChange > 0.3) return null
+  // Softer counter-move filter for HF
+  if (direction === 'BUY' && targetChange < -0.5) return null
+  if (direction === 'SELL' && targetChange > 0.5) return null
 
-  // Micro pullback detection: small retracement in the entry direction
-  let microPullbackDetected = false
-  if (targetHistory.length >= 10) {
-    const last10 = targetHistory.slice(-10)
-    const recentHigh = Math.max(...last10.map(p => p.price))
-    const recentLow = Math.min(...last10.map(p => p.price))
-    const currentTargetPrice = targetHistory[targetHistory.length - 1].price
-
-    if (direction === 'BUY') {
-      // Price pulled back slightly from recent high
-      const pullback = (recentHigh - currentTargetPrice) / recentHigh * 100
-      microPullbackDetected = pullback > 0.03 && pullback < 0.3
-    } else {
-      const pullback = (currentTargetPrice - recentLow) / recentLow * 100
-      microPullbackDetected = pullback > 0.03 && pullback < 0.3
-    }
+  // Order book alignment check
+  let orderBookAligned = false
+  if (orderBook && orderBook.direction !== 'NEUTRAL') {
+    orderBookAligned = orderBook.direction === direction
   }
 
-  // Confidence calculation
-  let confidence = 40
-  confidence += Math.min(20, lagScore * 40)
-  confidence += Math.min(15, correlation * 15)
+  let confidence = 35
+  confidence += Math.min(20, lagScore * 100)
+  confidence += Math.min(10, correlation * 12)
   confidence += Math.min(10, btcState.eventStrength / 10)
-  if (microPullbackDetected) confidence += 10
+  if (orderBookAligned) confidence += 10
   if (btcState.direction === 'STRONG_BULLISH' || btcState.direction === 'STRONG_BEARISH') confidence += 5
   confidence = Math.min(95, Math.round(confidence))
 
   const reason = [
-    `BTC ${btcChange > 0 ? '+' : ''}${btcChange.toFixed(2)}%`,
-    `${target.label} ${targetChange > 0 ? '+' : ''}${targetChange.toFixed(2)}% (expected ${expectedTargetChange > 0 ? '+' : ''}${expectedTargetChange.toFixed(2)}%)`,
-    `Lag: ${lagScore.toFixed(2)}%`,
-    `Correlation: ${correlation.toFixed(2)}`,
-    microPullbackDetected ? 'Micro pullback confirmed' : 'Waiting for pullback',
-  ].join(' | ')
+    `BTC ${btcChange > 0 ? '+' : ''}${btcChange.toFixed(3)}%`,
+    `${target.label} ${targetChange > 0 ? '+' : ''}${targetChange.toFixed(3)}%`,
+    `Lag: ${lagScore.toFixed(3)}%`,
+    `Corr: ${correlation.toFixed(2)}`,
+    orderBookAligned ? 'OB aligned' : '',
+  ].filter(Boolean).join(' | ')
 
   return {
     symbol: target.symbol,
@@ -349,12 +378,13 @@ export function detectLag(
     correlation,
     direction,
     confidence,
-    microPullbackDetected,
+    microPullbackDetected: false, // disabled for HF
+    orderBookAligned,
     reason,
   }
 }
 
-// ─── Signal Generation ─────────────────────────────────────────────────────────
+// ─── Signal Generation (HF — no RSI, no pullback wait) ─────────────────────────
 
 export function generateCorrelationSignal(
   lag: LagOpportunity,
@@ -362,36 +392,19 @@ export function generateCorrelationSignal(
   targetKlines: OHLCV[],
   btcState: BTCState
 ): CorrelationSignal | null {
-  // Cooldown check
   const now = Date.now()
   const lastTime = lastSignalTime[lag.symbol] || 0
   if (now - lastTime < SIGNAL_COOLDOWN_MS) return null
 
-  // Must have reasonable confidence
-  if (lag.confidence < 55) return null
+  if (lag.confidence < 40) return null
 
-  // RSI filter: don't buy overbought or sell oversold
-  const closes = targetKlines.map(k => k.close)
-  const rsi = latestRSI(closes)
-  if (rsi !== null) {
-    if (lag.direction === 'BUY' && rsi > 75) return null
-    if (lag.direction === 'SELL' && rsi < 25) return null
-  }
+  // RSI filter DISABLED for HF mode
 
-  // MACD confirmation (bonus, not required)
-  const macd = latestMACD(closes)
-  let macdAligned = false
-  if (macd) {
-    macdAligned = (lag.direction === 'BUY' && macd.histogram > 0) ||
-                  (lag.direction === 'SELL' && macd.histogram < 0)
-  }
-
-  // ATR for SL/TP calculation
   const atr = calcATR(targetKlines) || targetPrice * 0.005
 
-  // Scalping SL/TP: tight but reasonable
-  const slMultiplier = 1.2
-  const tpMultiplier = macdAligned ? 2.0 : 1.5
+  // Tight scalping SL/TP for HF
+  const slMultiplier = 0.8
+  const tpMultiplier = lag.orderBookAligned ? 1.2 : 1.0
 
   let stopLoss: number
   let takeProfit: number
@@ -404,8 +417,8 @@ export function generateCorrelationSignal(
     takeProfit = targetPrice - atr * tpMultiplier
   }
 
-  // Minimum SL distance: 0.15% of entry price
-  const minSLDist = targetPrice * 0.0015
+  // Min SL distance: 0.08% for HF
+  const minSLDist = targetPrice * 0.0008
   if (Math.abs(targetPrice - stopLoss) < minSLDist) {
     stopLoss = lag.direction === 'BUY'
       ? targetPrice - minSLDist
@@ -416,23 +429,19 @@ export function generateCorrelationSignal(
   const reward = Math.abs(takeProfit - targetPrice)
   const riskReward = risk > 0 ? reward / risk : 0
 
-  if (riskReward < 1.2) return null
-
-  // Apply MACD bonus to confidence
-  let finalConfidence = lag.confidence
-  if (macdAligned) finalConfidence = Math.min(95, finalConfidence + 5)
+  if (riskReward < 0.8) return null // lower R:R threshold for HF
 
   lastSignalTime[lag.symbol] = now
 
   return {
-    id: `corr_${now}_${Math.random().toString(36).substr(2, 6)}`,
+    id: `hf_${now}_${Math.random().toString(36).substr(2, 6)}`,
     symbol: lag.symbol,
     label: lag.label,
     action: lag.direction,
     entry: targetPrice,
     stopLoss: Math.round(stopLoss * 100) / 100,
     takeProfit: Math.round(takeProfit * 100) / 100,
-    confidence: finalConfidence,
+    confidence: lag.confidence,
     lagScore: lag.lagScore,
     btcChange: lag.btcChange,
     btcDirection: btcState.direction,
@@ -443,22 +452,16 @@ export function generateCorrelationSignal(
   }
 }
 
-// ─── Trade Management ──────────────────────────────────────────────────────────
+// ─── Trade Management (HF — multiple entries allowed) ──────────────────────────
 
 export function openTrade(signal: CorrelationSignal): ActiveTrade | null {
-  // Check max trades per symbol
   const symbolTrades = activeTrades.filter(
     t => t.signal.symbol === signal.symbol && t.status === 'OPEN'
   )
   if (symbolTrades.length >= MAX_OPEN_TRADES_PER_SYMBOL) return null
 
-  // Check max total trades
   const openTrades = activeTrades.filter(t => t.status === 'OPEN')
   if (openTrades.length >= MAX_TOTAL_TRADES) return null
-
-  // Check no duplicate direction
-  const sameDirTrade = symbolTrades.find(t => t.signal.action === signal.action)
-  if (sameDirTrade) return null
 
   const trade: ActiveTrade = {
     id: `trade_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
@@ -472,9 +475,7 @@ export function openTrade(signal: CorrelationSignal): ActiveTrade | null {
   }
 
   activeTrades.push(trade)
-
-  // Keep only last 100 trades in memory
-  while (activeTrades.length > 100) activeTrades.shift()
+  while (activeTrades.length > 200) activeTrades.shift()
 
   return trade
 }
@@ -508,37 +509,36 @@ export function updateTrades(prices: Record<string, number>): ActiveTrade[] {
   return updatedTrades
 }
 
-// ─── Emergency Exit ────────────────────────────────────────────────────────────
+// ─── Emergency Exit (HF — faster) ──────────────────────────────────────────────
 
 export function checkEmergencyExit(
   btcState: BTCState,
   trade: ActiveTrade
 ): EmergencyExitReason {
-  // BTC reversed strongly against our trade direction
   if (trade.signal.action === 'BUY') {
-    if (btcState.changes['1m'] < -0.3 && btcState.direction === 'STRONG_BEARISH') {
-      return { shouldExit: true, reason: 'BTC reversed strongly (bearish)' }
+    if (btcState.changes['10s'] < -0.08 && (btcState.direction === 'STRONG_BEARISH' || btcState.direction === 'BEARISH')) {
+      return { shouldExit: true, reason: 'انعكاس BTC سريع (هبوط)' }
     }
   } else {
-    if (btcState.changes['1m'] > 0.3 && btcState.direction === 'STRONG_BULLISH') {
-      return { shouldExit: true, reason: 'BTC reversed strongly (bullish)' }
+    if (btcState.changes['10s'] > 0.08 && (btcState.direction === 'STRONG_BULLISH' || btcState.direction === 'BULLISH')) {
+      return { shouldExit: true, reason: 'انعكاس BTC سريع (صعود)' }
     }
   }
 
-  // Lag disappeared: target caught up and moved past expected
+  // Target caught up — take profit early
   const targetHistory = targetPriceHistories[trade.signal.symbol]
   if (targetHistory && targetHistory.length > 5) {
-    const targetChange1m = getChangePercent(targetHistory, 60)
-    const isTargetCaughtUp = Math.abs(targetChange1m) > Math.abs(trade.signal.btcChange) * 0.8
+    const targetChange10s = getChangePercent(targetHistory, 10)
+    const isTargetCaughtUp = Math.abs(targetChange10s) > Math.abs(trade.signal.btcChange) * 0.6
     if (isTargetCaughtUp && trade.pnl > 0) {
-      return { shouldExit: true, reason: 'Lag closed — target caught up (profit lock)' }
+      return { shouldExit: true, reason: 'العملة لحقت — تأمين الربح' }
     }
   }
 
-  // Time stop: 10 minutes without significant profit
+  // Time stop: 2 minutes for HF
   const tradeAge = Date.now() - trade.openedAt
-  if (tradeAge > 10 * 60 * 1000 && Math.abs(trade.pnlPercent) < 0.05) {
-    return { shouldExit: true, reason: 'Time stop — no significant move in 10 minutes' }
+  if (tradeAge > TRADE_TIMEOUT_MS && Math.abs(trade.pnlPercent) < 0.02) {
+    return { shouldExit: true, reason: 'انتهى الوقت — 2 دقيقة بدون حركة' }
   }
 
   return { shouldExit: false, reason: '' }
@@ -567,15 +567,14 @@ export function runCorrelationAnalysis(
     config: TargetConfig
     price: number
     klines: OHLCV[]
+    depth?: { bids: [string, string][], asks: [string, string][] } | null
   }>,
   currentPrices: Record<string, number>
 ): CorrelationAnalysis {
   const btcState = analyzeBTC(btcPrice)
 
-  // Update existing trades
   updateTrades(currentPrices)
 
-  // Check emergency exits
   for (const trade of activeTrades.filter(t => t.status === 'OPEN')) {
     const exitCheck = checkEmergencyExit(btcState, trade)
     if (exitCheck.shouldExit) {
@@ -587,7 +586,6 @@ export function runCorrelationAnalysis(
   const signals: CorrelationSignal[] = []
 
   for (const td of targetData) {
-    // Update target price history
     if (!targetPriceHistories[td.config.symbol]) {
       targetPriceHistories[td.config.symbol] = []
     }
@@ -596,6 +594,8 @@ export function runCorrelationAnalysis(
     const targetHistory = targetPriceHistories[td.config.symbol]
     const change1m = getChangePercent(targetHistory, 60)
     const change5m = getChangePercent(targetHistory, 300)
+    const change5s = getChangePercent(targetHistory, 5)
+    const change10s = getChangePercent(targetHistory, 10)
 
     const btcCloses = btcKlines.map(k => k.close)
     const targetCloses = td.klines.map(k => k.close)
@@ -604,8 +604,9 @@ export function runCorrelationAnalysis(
     const atr = calcATR(td.klines) || td.price * 0.005
     const rsi = latestRSI(targetCloses)
 
-    // Lag detection
-    const lag = detectLag(btcState, td.config, td.price, td.klines, btcKlines)
+    const orderBook = analyzeOrderBook(td.depth || null)
+
+    const lag = detectLag(btcState, td.config, td.price, td.klines, btcKlines, orderBook)
 
     const lagScore = lag ? lag.lagScore : 0
     const lagDetected = lag !== null
@@ -616,17 +617,19 @@ export function runCorrelationAnalysis(
       currentPrice: td.price,
       change1m,
       change5m,
+      change5s,
+      change10s,
       correlation,
       lagScore,
       lagDetected,
       opportunity: lag,
       atr,
       rsi,
+      orderBook,
     }
     targets.push(analysis)
 
-    // Generate signal if lag detected
-    if (lag && lag.confidence >= 55) {
+    if (lag && lag.confidence >= 40) {
       const signal = generateCorrelationSignal(lag, td.price, td.klines, btcState)
       if (signal) {
         signals.push(signal)
@@ -638,12 +641,10 @@ export function runCorrelationAnalysis(
     btc: btcState,
     targets,
     signals,
-    activeTrades: [...activeTrades].reverse().slice(0, 50),
+    activeTrades: [...activeTrades].reverse().slice(0, 100),
     timestamp: Date.now(),
   }
 }
-
-// ─── Utility: Get active trades (read-only) ────────────────────────────────────
 
 export function getActiveTrades(): ActiveTrade[] {
   return activeTrades.filter(t => t.status === 'OPEN')
@@ -652,8 +653,6 @@ export function getActiveTrades(): ActiveTrade[] {
 export function getAllTrades(): ActiveTrade[] {
   return [...activeTrades].reverse()
 }
-
-// ─── Utility: Reset state (for testing) ────────────────────────────────────────
 
 export function resetState() {
   btcPriceHistory.length = 0
